@@ -448,6 +448,7 @@ def gerar_relatorio_sinir(df_registros, dt_inicio, dt_fim):
 # DMR (DECLARAÇÃO DE MOVIMENTAÇÃO DE RESÍDUOS) - SINIR
 # =======================================================
 DESTINACOES_INVALIDAS_DMR = {"", "n/a", "na", "análise externa", "analise externa"}
+DESTINACOES_FORA_DMR = {"logística reversa", "logistica reversa"}  # Não são declaradas na DMR
 
 def periodo_trimestre(ano, trimestre):
     """Primeiro e último dia do trimestre (1 a 4) do ano."""
@@ -502,16 +503,24 @@ def preparar_dmr(df_registros, dt_inicio, dt_fim):
     df['Parceiro'] = df['Parceiro'].map(clean_str)
     df['Destinacao'] = df['Destinacao'].map(clean_str)
 
-    df['_servico'] = df['Residuo'].map(_eh_servico)
-    ignorados = df[df['_servico']]
-    sem_peso = df[~df['_servico'] & (df['Peso_KG_Real'] <= 0)]
-    df = df[~df['_servico'] & (df['Peso_KG_Real'] > 0)].copy()
-    if df.empty:
-        vazio['ignorados'] = ignorados
-        return vazio
-
     residuos = db.get_banco_residuos()
     parceiros = db.get_banco_parceiros()
+
+    # --- O que fica fora da DMR (e por quê) ---
+    nao_entra = {clean_str(r) for r, e in zip(residuos.get('Residuo', []), residuos.get('EntraDMR', []))
+                 if str(e) in ('0', '0.0', 'False')}
+    def motivo_fora(row):
+        if _eh_servico(row['Residuo']): return "Análise / frete / locação"
+        if row['Destinacao'].lower() in DESTINACOES_FORA_DMR: return row['Destinacao']
+        if row['Residuo'] in nao_entra: return "Resíduo marcado como 'não entra na DMR'"
+        return ""
+    df['Motivo'] = df.apply(motivo_fora, axis=1)
+    ignorados = df[df['Motivo'] != ""]
+    sem_peso = df[(df['Motivo'] == "") & (df['Peso_KG_Real'] <= 0)]
+    df = df[(df['Motivo'] == "") & (df['Peso_KG_Real'] > 0)].copy()
+    if df.empty:
+        vazio['ignorados'] = ignorados[['Data', 'Residuo', 'Parceiro', 'Destinacao', 'Peso_KG_Real', 'Motivo']]
+        return vazio
     mapa_ibama = {clean_str(r): clean_str(c) for r, c in zip(residuos.get('Residuo', []), residuos.get('CodigoIBAMA', []))}
     mapa_cnpj = {clean_str(p): clean_str(c) for p, c in zip(parceiros.get('Parceiro', []), parceiros.get('CNPJ', []))}
     df['CodigoIBAMA'] = df['Residuo'].map(lambda r: formatar_codigo_ibama(mapa_ibama.get(r, "")))
@@ -577,8 +586,9 @@ def preparar_dmr(df_registros, dt_inicio, dt_fim):
                                 'Parceiro': 'Destinador', 'CNPJ': 'CNPJ Destinador', 'Destinacao': 'Tecnologia de Destinação',
                                 'Peso_KG_Real': 'Peso (kg)', 'PedidoCompra': 'Pedido de Compra'})
 
-    ign = ignorados[['Data', 'Residuo', 'Parceiro', 'Destinacao']].copy()
+    ign = ignorados.sort_values('Data')[['Data', 'Residuo', 'Parceiro', 'Destinacao', 'Peso_KG_Real', 'Motivo']].copy()
     ign['Data'] = pd.to_datetime(ign['Data']).dt.strftime('%d/%m/%Y')
+    ign = ign.rename(columns={'Residuo': 'Resíduo', 'Parceiro': 'Parceiro', 'Destinacao': 'Destinação', 'Peso_KG_Real': 'Peso (kg)'})
 
     return {"resumo": resumo, "por_codigo": por_codigo, "por_mes": por_mes,
             "lancamentos": lanc, "pendencias": pendencias, "ignorados": ign}

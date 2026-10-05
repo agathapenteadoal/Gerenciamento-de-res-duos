@@ -170,7 +170,8 @@ def create_tables():
         ('Grupo', "TEXT DEFAULT ''"),
         ('ExigeNF', "INTEGER DEFAULT 1"),           
         ('ExigeCertificado', "INTEGER DEFAULT 1"),   
-        ('CodigoIBAMA', "TEXT DEFAULT ''")
+        ('CodigoIBAMA', "TEXT DEFAULT ''"),
+        ('EntraDMR', "INTEGER DEFAULT 1")
     ]
     for col_name, col_def in colunas_check_residuos:
         if col_name not in cols_residuos:
@@ -312,7 +313,7 @@ def update_nf(registro_id, status_nf):
 # --- CRUD Apoio ---
 def get_banco_residuos():
     conn = connect_db()
-    df_cols = ['Residuo', 'NomeNF', 'CodigoItem', 'CodigoIBAMA', 'ModoPadrao', 'ValorPorKgPadrao', 'ValorFechadoPadrao', 'PesoUnitarioKgPadrao', 'CalculaRateio', 'EstadoPadrao', 'DestinacaoPadrao', 'TipoPadrao', 'ParceiroPadrao', 'Grupo', 'ExigeNF', 'ExigeCertificado']
+    df_cols = ['Residuo', 'NomeNF', 'CodigoItem', 'CodigoIBAMA', 'ModoPadrao', 'ValorPorKgPadrao', 'ValorFechadoPadrao', 'PesoUnitarioKgPadrao', 'CalculaRateio', 'EstadoPadrao', 'DestinacaoPadrao', 'TipoPadrao', 'ParceiroPadrao', 'Grupo', 'ExigeNF', 'ExigeCertificado', 'EntraDMR']
     df = pd.DataFrame(columns=df_cols)
     try:
         df = pd.read_sql_query("SELECT " + ", ".join(df_cols) + " FROM residuos ORDER BY Residuo", conn)
@@ -331,6 +332,16 @@ def add_residuo(nome, nome_nf, codigo_item, codigo_ibama, modo, val_kg, val_fec,
     except sqlite3.IntegrityError: _registrar_erro(f"Já existe um resíduo cadastrado com o nome '{nome}'.")
     except Exception as e: _registrar_erro(f"Erro em add_residuo: {e}"); conn.rollback()
     finally: conn.close(); return success
+
+def set_entra_dmr(residuo, entra):
+    """Define se o resíduo entra na DMR do SINIR (1) ou não (0)."""
+    conn = connect_db()
+    try:
+        conn.execute("UPDATE residuos SET EntraDMR = ? WHERE Residuo = ?", (1 if entra else 0, residuo))
+        conn.commit(); return True
+    except Exception as e:
+        _registrar_erro(f"Erro em set_entra_dmr: {e}"); return False
+    finally: conn.close()
 
 def update_residuo(nome_antigo, nome_novo, nome_nf, codigo_item, codigo_ibama, modo, val_kg, val_fec, peso_unit_kg, calcula_rateio, estado, dest, tipo, parc, grupo, exige_nf, exige_cert): 
     conn=connect_db(); cursor=conn.cursor(); success=False

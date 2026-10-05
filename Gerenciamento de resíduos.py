@@ -2546,6 +2546,7 @@ for c, w, a, estica in (("Resíduo", 220, "w", True), ("Código IBAMA", 135, "ce
                         ("Destinação padrão", 170, "center", False), ("Valor padrão", 190, "e", False)):
     bn_tbl.heading(c, text=c); bn_tbl.column(c, width=w, anchor=a, stretch=estica)
 bn_tbl.tag_configure("sem_ibama", foreground="#cc0000")
+bn_tbl.tag_configure("fora_dmr", foreground="#888888")
 bn_tbl.bind("<Double-1>", lambda e: banco_edit_wrapper())  # Dois cliques abrem a edição
 
 # =========================
@@ -3148,6 +3149,7 @@ def abrir_janela_gerenciar_residuo(nome_antigo=None):
     rateio_var = tk.IntVar(value= 1 if dados_atuais.get('calcula_rateio', 0) else 0)
     exige_nf_var = tk.IntVar(value=1 if not is_edit_mode else int(dados_atuais.get('exige_nf', 1)))
     exige_cert_var = tk.IntVar(value=1 if not is_edit_mode else int(dados_atuais.get('exige_cert', 1)))
+    entra_dmr_var = tk.IntVar(value=1 if dados_atuais.get('entra_dmr', True) else 0)
     
     padrao_estado_var = tk.StringVar(value=dados_atuais.get('estado_padrao', ''))
     padrao_dest_var = tk.StringVar(value=dados_atuais.get('destinacao_padrao', ''))
@@ -3190,6 +3192,9 @@ def abrir_janela_gerenciar_residuo(nome_antigo=None):
     tb.Label(col_dir, text="Regras de Compliance:", bootstyle="primary").grid(row=r, column=0, columnspan=2, sticky="w", pady=(0,5)); r+=1
     tb.Checkbutton(col_dir, text="Exige Nota Fiscal (NF)?", variable=exige_nf_var, bootstyle="round-toggle").grid(row=r, column=0, columnspan=2, sticky="w", pady=5); r+=1
     tb.Checkbutton(col_dir, text="Exige Certificado?", variable=exige_cert_var, bootstyle="round-toggle").grid(row=r, column=0, columnspan=2, sticky="w", pady=5); r+=1
+    tb.Checkbutton(col_dir, text="Entra na DMR (SINIR)?", variable=entra_dmr_var, bootstyle="round-toggle").grid(row=r, column=0, columnspan=2, sticky="w", pady=5); r+=1
+    tb.Label(col_dir, text="Desligue para itens sem código IBAMA que não são declarados.\n(Lançamentos de 'Logística reversa' já ficam fora automaticamente.)",
+             bootstyle="secondary", font=("Segoe UI", 8)).grid(row=r, column=0, columnspan=2, sticky="w"); r+=1
 
     frame_btns = tb.Frame(edit_window)
     frame_btns.pack(fill="x", padx=15, pady=10)
@@ -3227,6 +3232,7 @@ def abrir_janela_gerenciar_residuo(nome_antigo=None):
             else: ModernMessageBox.showerror("Erro", detalhe_erro_db("Não foi possível adicionar."), parent=edit_window)
 
         if success:
+            db.set_entra_dmr(nome_novo, entra_dmr_var.get())
             if is_edit_mode:
                 nf_bool = bool(exige_nf_var.get()); cert_bool = bool(exige_cert_var.get())
                 msg = f"As regras de compliance para '{nome_novo}' foram salvas.\nDeseja atualizar TODOS os registros passados com essas novas regras?"
@@ -3618,12 +3624,14 @@ def preencher_banco_tabela():
             'parceiro_padrao': clean_str(row.get('ParceiroPadrao', '')),
             'grupo': clean_str(row.get('Grupo', '')),
             'exige_nf': bool(row.get('ExigeNF', 1)),
-            'exige_cert': bool(row.get('ExigeCertificado', 1))
+            'exige_cert': bool(row.get('ExigeCertificado', 1)),
+            'entra_dmr': str(row.get('EntraDMR', 1)) not in ('0', '0.0', 'False')
         }
         banco_dict[residuo_nome] = residuo_data 
         codigo_ibama = calculos.formatar_codigo_ibama(residuo_data['codigo_ibama'])
         if q and not any(q in normalizar(t) for t in (residuo_nome, residuo_data['nome_nf'], residuo_data['codigo_ibama'])): continue
-        if bn_so_sem_ibama.get() and codigo_ibama: continue
+        entra_dmr = residuo_data['entra_dmr']
+        if bn_so_sem_ibama.get() and (codigo_ibama or not entra_dmr): continue
 
         # Valor padrão numa coluna só, conforme o modo (vazio quando não há valor)
         modo = residuo_data['modo']
@@ -3637,14 +3645,15 @@ def preencher_banco_tabela():
 
         values_display = (
             residuo_nome,
-            codigo_ibama or "falta",
+            codigo_ibama or ("não entra na DMR" if not entra_dmr else "falta"),
             residuo_data['nome_nf'],
             residuo_data['codigo_item'],
             residuo_data['destinacao_padrao'],
             valor_txt,
         )
         tags = ["evenrow" if row_num % 2 == 0 else "oddrow"]
-        if not codigo_ibama: tags.append("sem_ibama")
+        if not entra_dmr: tags.append("fora_dmr")
+        elif not codigo_ibama: tags.append("sem_ibama")
         bn_tbl.insert("", "end", iid=str(i), values=values_display, tags=tuple(tags))
         row_num += 1
         
@@ -7271,7 +7280,7 @@ def exportar_para_sinir():
     sb = ttk.Scrollbar(card, orient="vertical", command=tv.yview); tv.configure(yscroll=sb.set); sb.grid(row=0, column=1, sticky="ns")
 
     rodape = tb.Frame(win, padding=15); rodape.pack(fill="x")
-    tb.Label(rodape, text="Análises, fretes e locações não entram na DMR.", bootstyle=SECONDARY).pack(side="left")
+    tb.Label(rodape, text="Ficam fora da DMR: análises, fretes, locações, logística reversa e resíduos marcados como 'não entra'.", bootstyle=SECONDARY).pack(side="left")
     tb.Button(rodape, text="Fechar", bootstyle=SECONDARY, command=win.destroy).pack(side="right")
     btn_gerar = tb.Button(rodape, text="Gerar planilha DMR", bootstyle=SUCCESS, state="disabled")
     btn_gerar.pack(side="right", padx=10)
