@@ -2459,7 +2459,7 @@ btn_export.pack(side="right")
 
 btn_pdf = tb.Button(header_tbl, text="Relatório PDF", bootstyle="danger-outline", cursor="hand2")
 btn_pdf.pack(side="right", padx=0)
-btn_sinir = tb.Button(header_tbl, text="Exportar p/ SINIR", bootstyle="info", cursor="hand2")
+btn_sinir = tb.Button(header_tbl, text="DMR / SINIR", bootstyle="info", cursor="hand2")
 btn_sinir.pack(side="right", padx=(0, 10))
 
 # Tabela
@@ -7196,47 +7196,114 @@ def atualizar_dashboard():
     set_status(f"Análise atualizada: {dt_inicio:%d/%m/%y} - {dt_fim:%d/%m/%y}.")
     
 def exportar_para_sinir():
-    """Gera a planilha formatada para a declaração do SINIR/Órgão Estadual."""
-    try:
-        dt_inicio = ana_data_inicio.get_date()
-        dt_fim = ana_data_fim.get_date()
-    except Exception as e:
-        ModernMessageBox.showerror("Erro Data", f"Datas inválidas: {e}")
-        return
+    """Assistente da DMR trimestral (SINIR): escolhe o trimestre, aponta pendências e gera a planilha."""
+    win = tb.Toplevel(app)
+    win.title("Assistente da DMR — SINIR")
+    win.geometry("1000x600")
+    win.transient(app)  # Sem grab_set: dá para corrigir cadastros com a janela aberta e clicar em "Verificar" de novo
 
-    # Usamos o DataFrame global não filtrado (os filtros visuais não importam para o SINIR, apenas a data)
-    base = obter_df_registros()
-    
-    # Chama a função que criamos no calculos.py
-    df_sinir = calculos.gerar_relatorio_sinir(base, dt_inicio, dt_fim)
-    
-    if df_sinir.empty:
-        ModernMessageBox.showinfo("SINIR", f"Nenhum dado encontrado no período de {dt_inicio:%d/%m/%Y} a {dt_fim:%d/%m/%Y}.")
-        return
+    ano_padrao, tri_padrao = calculos.ultimo_trimestre_fechado()
+    nomes_tri = ["1º trimestre (jan–mar)", "2º trimestre (abr–jun)", "3º trimestre (jul–set)", "4º trimestre (out–dez)"]
+    ano_var = tk.StringVar(value=str(ano_padrao))
+    tri_var = tk.StringVar(value=nomes_tri[tri_padrao - 1])
+    resumo_var = tk.StringVar(value="")
+    estado = {"dados": None, "periodo": None}
 
-    default_filename = f"DMR_SINIR_{dt_inicio:%m-%Y}_a_{dt_fim:%m-%Y}.xlsx"
-    path = filedialog.asksaveasfilename(
-        defaultextension=".xlsx", 
-        filetypes=[("Arquivo Excel", "*.xlsx")], 
-        initialfile=default_filename, 
-        title="Salvar Relatório SINIR"
-    )
-    if not path: return
+    topo = tb.Frame(win, padding=(15, 15, 15, 5)); topo.pack(fill="x")
+    tb.Label(topo, text="Ano:").pack(side="left")
+    tb.Spinbox(topo, from_=2020, to=2100, textvariable=ano_var, width=6).pack(side="left", padx=(5, 15))
+    tb.Label(topo, text="Trimestre:").pack(side="left")
+    tb.Combobox(topo, textvariable=tri_var, values=nomes_tri, state="readonly", width=24).pack(side="left", padx=(5, 15))
+    btn_verificar = tb.Button(topo, text="Verificar", bootstyle=PRIMARY)
+    btn_verificar.pack(side="left")
 
-    try:
-        with pd.ExcelWriter(path, engine='openpyxl') as writer:
-            df_sinir.to_excel(writer, sheet_name="DMR_SINIR", index=False)
-            
-            # Estética do Excel
-            ws = writer.sheets['DMR_SINIR']
-            for col in ws.columns:
-                col_name = col[0].value
-                length = max((len(str(cell.value)) for cell in col), default=15)
-                ws.column_dimensions[col[0].column_letter].width = min(length + 2, 50)
-                
-        ModernMessageBox.showinfo("Sucesso", f"Relatório SINIR exportado com sucesso!\nCopie os dados da planilha para o portal do órgão ambiental.")
-    except Exception as e:
-        ModernMessageBox.showerror("Erro", f"Falha ao salvar arquivo: {e}")
+    tb.Label(win, textvariable=resumo_var, font=("Segoe UI", 10, "bold"), padding=(15, 5)).pack(fill="x")
+
+    card = tb.Labelframe(win, text="Pendências — corrija antes de declarar", padding=6, bootstyle=WARNING)
+    card.pack(fill="both", expand=True, padx=15, pady=5); card.rowconfigure(0, weight=1); card.columnconfigure(0, weight=1)
+    cols = ("Problema", "Item", "Lançamentos", "Peso (kg)", "Como resolver")
+    tv = ttk.Treeview(card, columns=cols, show="headings")
+    for c, w, a in zip(cols, (270, 180, 95, 90, 360), ("w", "w", "center", "e", "w")):
+        tv.heading(c, text=c); tv.column(c, width=w, anchor=a, stretch=(c == "Como resolver"))
+    tv.grid(row=0, column=0, sticky="nsew")
+    sb = ttk.Scrollbar(card, orient="vertical", command=tv.yview); tv.configure(yscroll=sb.set); sb.grid(row=0, column=1, sticky="ns")
+
+    rodape = tb.Frame(win, padding=15); rodape.pack(fill="x")
+    tb.Label(rodape, text="Análises, fretes e locações não entram na DMR.", bootstyle=SECONDARY).pack(side="left")
+    tb.Button(rodape, text="Fechar", bootstyle=SECONDARY, command=win.destroy).pack(side="right")
+    btn_gerar = tb.Button(rodape, text="Gerar planilha DMR", bootstyle=SUCCESS, state="disabled")
+    btn_gerar.pack(side="right", padx=10)
+
+    def verificar():
+        try:
+            ano = int(ano_var.get()); tri = nomes_tri.index(tri_var.get()) + 1
+        except ValueError:
+            ModernMessageBox.showerror("Ano inválido", "Informe um ano válido.", parent=win); return
+        dt_ini, dt_fim = calculos.periodo_trimestre(ano, tri)
+        base = db.get_all_registros_df(data_inicio=dt_ini.isoformat())  # Lê do banco: reflete correções recentes
+        dados = calculos.preparar_dmr(base, dt_ini, dt_fim)
+        estado["dados"], estado["periodo"] = dados, (ano, tri, dt_ini, dt_fim)
+
+        for r in tv.get_children(): tv.delete(r)
+        pend = dados["pendencias"]
+        for _, row in pend.iterrows():
+            tv.insert("", "end", values=(row["Problema"], row["Item"], row["Lançamentos"], fmt_kg(row["Peso (kg)"]), row["Como resolver"]))
+
+        resumo = dados["resumo"]
+        if resumo.empty:
+            resumo_var.set(f"{dt_ini:%d/%m/%Y} a {dt_fim:%d/%m/%Y}: nenhum resíduo lançado no período.")
+            btn_gerar.configure(state="disabled"); return
+        total_t = resumo["Quantidade (t)"].sum()
+        txt_pend = "nenhuma pendência ✔" if pend.empty else f"{len(pend)} pendência(s)"
+        resumo_var.set(f"{dt_ini:%d/%m/%Y} a {dt_fim:%d/%m/%Y}  ·  {resumo['Resíduo'].nunique()} resíduos  ·  "
+                       f"{total_t:,.3f} t".replace(",", "X").replace(".", ",").replace("X", ".") + f"  ·  {txt_pend}")
+        card.configure(bootstyle=(SUCCESS if pend.empty else WARNING))
+        btn_gerar.configure(state="normal")
+
+    def gerar():
+        dados = estado["dados"]
+        ano, tri, dt_ini, dt_fim = estado["periodo"]
+        if not dados["pendencias"].empty and not ModernMessageBox.askyesno(
+                "Pendências", f"Ainda há {len(dados['pendencias'])} pendência(s).\nGerar a planilha mesmo assim?\n\n"
+                "(Elas também serão listadas na aba 'Pendências' da planilha.)", parent=win):
+            return
+        path = filedialog.asksaveasfilename(parent=win, defaultextension=".xlsx", filetypes=[("Arquivo Excel", "*.xlsx")],
+                                            initialfile=f"DMR_{tri}T_{ano}.xlsx", title="Salvar planilha da DMR")
+        if not path: return
+        try:
+            from openpyxl.styles import Font, PatternFill
+            abas = [("DMR - Resumo", dados["resumo"]), ("Por código IBAMA", dados["por_codigo"]),
+                    ("Por mês", dados["por_mes"]), ("Lançamentos", dados["lancamentos"]),
+                    ("Pendências", dados["pendencias"]), ("Fora da DMR", dados["ignorados"])]
+            with pd.ExcelWriter(path, engine='openpyxl') as writer:
+                for nome, df_aba in abas:
+                    df_aba.to_excel(writer, sheet_name=nome, index=False)
+                    ws = writer.sheets[nome]
+                    ws.freeze_panes = "A2"
+                    for cel in ws[1]:
+                        cel.font = Font(bold=True, color="FFFFFF"); cel.fill = PatternFill("solid", fgColor="1F6E8C")
+                    for col in ws.columns:
+                        largura = max((len(str(c.value)) for c in col if c.value is not None), default=10)
+                        ws.column_dimensions[col[0].column_letter].width = min(largura + 2, 60)
+                    # Destaca em amarelo células obrigatórias vazias (código IBAMA / CNPJ)
+                    cabec = [c.value for c in ws[1]]
+                    for nome_col in ("Código IBAMA", "CNPJ Destinador"):
+                        if nome_col in cabec:
+                            idx = cabec.index(nome_col) + 1
+                            for linha in ws.iter_rows(min_row=2, min_col=idx, max_col=idx):
+                                if not linha[0].value:
+                                    linha[0].fill = PatternFill("solid", fgColor="FFF2CC")
+            ModernMessageBox.showinfo("DMR", f"Planilha da DMR do {tri}º trimestre de {ano} gerada!\n\n"
+                                      "Use a aba 'DMR - Resumo' para preencher/conferir a declaração no SINIR.", parent=win)
+        except PermissionError:
+            ModernMessageBox.showerror("Erro", "Não foi possível salvar: o arquivo está aberto no Excel?\nFeche-o e tente de novo.", parent=win)
+        except Exception as e:
+            db._registrar_erro(f"Erro ao gerar planilha DMR: {e}")
+            ModernMessageBox.showerror("Erro", f"Falha ao salvar a planilha: {e}", parent=win)
+
+    btn_verificar.configure(command=verificar)
+    btn_gerar.configure(command=gerar)
+    verificar()
 
 # Liga o botão à função
 btn_sinir.configure(command=exportar_para_sinir)

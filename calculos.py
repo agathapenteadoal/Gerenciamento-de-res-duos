@@ -443,3 +443,142 @@ def gerar_relatorio_sinir(df_registros, dt_inicio, dt_fim):
     ]
     return df_sinir[colunas_finais]
 
+
+# =======================================================
+# DMR (DECLARAÇÃO DE MOVIMENTAÇÃO DE RESÍDUOS) - SINIR
+# =======================================================
+DESTINACOES_INVALIDAS_DMR = {"", "n/a", "na", "análise externa", "analise externa"}
+
+def periodo_trimestre(ano, trimestre):
+    """Primeiro e último dia do trimestre (1 a 4) do ano."""
+    mes_ini = 3 * (int(trimestre) - 1) + 1
+    inicio = date(int(ano), mes_ini, 1)
+    fim = (pd.Timestamp(inicio) + pd.DateOffset(months=3) - pd.Timedelta(days=1)).date()
+    return inicio, fim
+
+def ultimo_trimestre_fechado(hoje=None):
+    """(ano, trimestre) do último trimestre completo — o que normalmente vai ser declarado."""
+    hoje = hoje or date.today()
+    tri_atual = (hoje.month - 1) // 3 + 1
+    return (hoje.year - 1, 4) if tri_atual == 1 else (hoje.year, tri_atual - 1)
+
+def formatar_codigo_ibama(codigo):
+    """'161001' -> '16 10 01' (formato da Lista Brasileira de Resíduos). Mantém o '(*)' se houver."""
+    txt = clean_str(codigo)
+    if not txt: return ""
+    perigoso = "*" in txt
+    digitos = "".join(ch for ch in txt if ch.isdigit())
+    if len(digitos) != 6: return txt
+    return f"{digitos[0:2]} {digitos[2:4]} {digitos[4:6]}" + ("(*)" if perigoso else "")
+
+def formatar_cnpj(cnpj):
+    digitos = "".join(ch for ch in clean_str(cnpj) if ch.isdigit())
+    if len(digitos) != 14: return clean_str(cnpj)
+    return f"{digitos[0:2]}.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:12]}-{digitos[12:14]}"
+
+def _eh_servico(residuo):
+    """Análises, fretes e locações não são resíduos: ficam fora da DMR."""
+    nome = clean_str(residuo).upper()
+    return nome.startswith(("[ANÁLISE]", "[ANALISE]", "[FRETE]", "LOCAÇÃO", "LOCACAO"))
+
+def preparar_dmr(df_registros, dt_inicio, dt_fim):
+    """Monta os dados da DMR do período e a lista do que precisa ser corrigido antes de declarar.
+
+    Retorna um dict com DataFrames: 'resumo', 'por_codigo', 'por_mes', 'lancamentos',
+    'pendencias' e 'ignorados'.
+    """
+    vazio = {k: pd.DataFrame() for k in ("resumo", "por_codigo", "por_mes", "lancamentos", "pendencias", "ignorados")}
+    if df_registros is None or df_registros.empty: return vazio
+
+    df = df_registros.copy()
+    if 'id' not in df.columns: df = df.reset_index().rename(columns={'index': 'id'})
+    df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
+    fim = pd.to_datetime(dt_fim) + pd.Timedelta(days=1, seconds=-1)
+    df = df[(df['Data'] >= pd.to_datetime(dt_inicio)) & (df['Data'] <= fim)]
+    if df.empty: return vazio
+
+    df = get_df_com_peso_real(df)
+    df['Residuo'] = df['Residuo'].map(clean_str)
+    df['Parceiro'] = df['Parceiro'].map(clean_str)
+    df['Destinacao'] = df['Destinacao'].map(clean_str)
+
+    df['_servico'] = df['Residuo'].map(_eh_servico)
+    ignorados = df[df['_servico']]
+    sem_peso = df[~df['_servico'] & (df['Peso_KG_Real'] <= 0)]
+    df = df[~df['_servico'] & (df['Peso_KG_Real'] > 0)].copy()
+    if df.empty:
+        vazio['ignorados'] = ignorados
+        return vazio
+
+    residuos = db.get_banco_residuos()
+    parceiros = db.get_banco_parceiros()
+    mapa_ibama = {clean_str(r): clean_str(c) for r, c in zip(residuos.get('Residuo', []), residuos.get('CodigoIBAMA', []))}
+    mapa_cnpj = {clean_str(p): clean_str(c) for p, c in zip(parceiros.get('Parceiro', []), parceiros.get('CNPJ', []))}
+    df['CodigoIBAMA'] = df['Residuo'].map(lambda r: formatar_codigo_ibama(mapa_ibama.get(r, "")))
+    df['CNPJ'] = df['Parceiro'].map(lambda p: formatar_cnpj(mapa_cnpj.get(p, "")))
+    df['NumMTR'] = df['NumMTR'].map(clean_str) if 'NumMTR' in df.columns else ""
+    df['Mes'] = df['Data'].dt.month
+
+    # --- Pendências: o que impede uma declaração correta ---
+    pend = []
+    for residuo, grp in df[df['CodigoIBAMA'] == ""].groupby('Residuo'):
+        pend.append({"Problema": "Resíduo sem código IBAMA", "Item": residuo,
+                     "Lançamentos": len(grp), "Peso (kg)": round(grp['Peso_KG_Real'].sum(), 2),
+                     "Como resolver": "Configurações › Resíduos › Editar › Código IBAMA"})
+    for parceiro, grp in df[df['CNPJ'] == ""].groupby('Parceiro'):
+        pend.append({"Problema": "Destinador sem CNPJ", "Item": parceiro or "(sem parceiro)",
+                     "Lançamentos": len(grp), "Peso (kg)": round(grp['Peso_KG_Real'].sum(), 2),
+                     "Como resolver": "Configurações › Parceiros › Editar › CNPJ"})
+    dest_inval = df['Destinacao'].str.lower().isin(DESTINACOES_INVALIDAS_DMR)
+    for (residuo, destino), grp in df[dest_inval].groupby(['Residuo', 'Destinacao']):
+        datas = ", ".join(sorted({d.strftime('%d/%m') for d in grp['Data']}))
+        pend.append({"Problema": f"Destinação inválida ('{destino or 'vazia'}')", "Item": residuo,
+                     "Lançamentos": len(grp), "Peso (kg)": round(grp['Peso_KG_Real'].sum(), 2),
+                     "Como resolver": f"Aba Registros › editar o lançamento ({datas}) e corrigir a Destinação"})
+    for residuo, grp in sem_peso.groupby('Residuo'):
+        datas = ", ".join(sorted({d.strftime('%d/%m') for d in grp['Data']}))
+        pend.append({"Problema": "Lançamento sem peso (fora da DMR)", "Item": residuo,
+                     "Lançamentos": len(grp), "Peso (kg)": 0.0,
+                     "Como resolver": f"Aba Registros › editar o lançamento ({datas}) e informar o peso"})
+    pendencias = pd.DataFrame(pend, columns=["Problema", "Item", "Lançamentos", "Peso (kg)", "Como resolver"])
+
+    def juntar_mtrs(x):
+        return ", ".join(sorted({m for m in x if m and m.lower() != 'nan'}))
+
+    # --- Resumo: uma linha por resíduo x destinador x tecnologia ---
+    chaves = ['CodigoIBAMA', 'Residuo', 'Estado', 'Parceiro', 'CNPJ', 'Destinacao']
+    resumo = df.groupby(chaves, dropna=False).agg(
+        Peso_kg=('Peso_KG_Real', 'sum'), Lancamentos=('Peso_KG_Real', 'size'), MTRs=('NumMTR', juntar_mtrs)
+    ).reset_index().sort_values(['CodigoIBAMA', 'Residuo', 'Parceiro'])
+    resumo.insert(6, 'Quantidade (t)', (resumo['Peso_kg'] / 1000).round(4))
+    resumo = resumo.rename(columns={
+        'CodigoIBAMA': 'Código IBAMA', 'Residuo': 'Resíduo', 'Estado': 'Estado Físico',
+        'Parceiro': 'Destinador', 'CNPJ': 'CNPJ Destinador', 'Destinacao': 'Tecnologia de Destinação',
+        'Peso_kg': 'Quantidade (kg)', 'Lancamentos': 'Nº Lançamentos', 'MTRs': 'MTRs'})
+
+    # --- Total por código IBAMA (para conferir com o que o SINIR mostra) ---
+    df['_codigo'] = df['CodigoIBAMA'].replace("", "SEM CÓDIGO")
+    por_codigo = df.groupby('_codigo').agg(
+        Residuos=('Residuo', lambda x: ", ".join(sorted(set(x)))), Peso_kg=('Peso_KG_Real', 'sum')
+    ).reset_index()
+    por_codigo.insert(2, 'Quantidade (t)', (por_codigo['Peso_kg'] / 1000).round(4))
+    por_codigo = por_codigo.rename(columns={'_codigo': 'Código IBAMA', 'Residuos': 'Resíduos incluídos', 'Peso_kg': 'Quantidade (kg)'})
+
+    # --- Por mês (kg) ---
+    por_mes = df.pivot_table(index=['_codigo', 'Residuo'], columns='Mes', values='Peso_KG_Real', aggfunc='sum', fill_value=0)
+    por_mes.columns = [PT_ABREV_LIST[int(m) - 1].capitalize() + " (kg)" for m in por_mes.columns]
+    por_mes['Total (kg)'] = por_mes.sum(axis=1)
+    por_mes = por_mes.reset_index().rename(columns={'_codigo': 'Código IBAMA', 'Residuo': 'Resíduo'})
+
+    # --- Lançamentos (detalhe para conferência) ---
+    lanc = df.sort_values('Data')[['Data', 'CodigoIBAMA', 'Residuo', 'Estado', 'Parceiro', 'CNPJ', 'Destinacao', 'Peso_KG_Real', 'NumMTR', 'PedidoCompra']].copy()
+    lanc['Data'] = lanc['Data'].dt.strftime('%d/%m/%Y')
+    lanc = lanc.rename(columns={'CodigoIBAMA': 'Código IBAMA', 'Residuo': 'Resíduo', 'Estado': 'Estado Físico',
+                                'Parceiro': 'Destinador', 'CNPJ': 'CNPJ Destinador', 'Destinacao': 'Tecnologia de Destinação',
+                                'Peso_KG_Real': 'Peso (kg)', 'NumMTR': 'MTR', 'PedidoCompra': 'Pedido de Compra'})
+
+    ign = ignorados[['Data', 'Residuo', 'Parceiro', 'Destinacao']].copy()
+    ign['Data'] = pd.to_datetime(ign['Data']).dt.strftime('%d/%m/%Y')
+
+    return {"resumo": resumo, "por_codigo": por_codigo, "por_mes": por_mes,
+            "lancamentos": lanc, "pendencias": pendencias, "ignorados": ign}
