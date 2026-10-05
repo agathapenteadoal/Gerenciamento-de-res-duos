@@ -829,6 +829,13 @@ class SistemaGestaoAmbiental:
         self.btn_bn_edit.pack(side="left", padx=6)
         self.btn_bn_add.pack(side="left", padx=0)
 
+        # Busca por nome do resíduo
+        self.bn_busca = tk.StringVar()
+        self.bn_busca_entry = tb.Entry(bn_actions, textvariable=self.bn_busca, width=30)
+        self.bn_busca_entry.pack(side="right", padx=(0, 6))
+        tb.Label(bn_actions, text="Buscar resíduo:").pack(side="right", padx=(0, 6))
+        self.bn_busca.trace_add("write", lambda *_: self.preencher_banco_tabela())
+
         bn_card = tb.Labelframe(self.aba_banco, text="Resíduos cadastrados", padding=6, bootstyle=INFO)
         bn_card.pack(fill="both", expand=True, pady=(10,0)); bn_card.rowconfigure(0, weight=1); bn_card.columnconfigure(0, weight=1)
         
@@ -3124,6 +3131,7 @@ class SistemaGestaoAmbiental:
         self.df_banco = db.get_banco_residuos() 
         self.banco_dict.clear()
         for r in self.bn_tbl.get_children(): self.bn_tbl.delete(r)
+        q = normalizar(self.bn_busca.get()) if hasattr(self, "bn_busca") else ""
         row_num = 0
         for i, row in self.df_banco.iterrows():
             residuo_nome = clean_str(row.get("Residuo", ""))
@@ -3136,6 +3144,7 @@ class SistemaGestaoAmbiental:
                 'tipo_padrao': clean_str(row.get('TipoPadrao', '')), 'parceiro_padrao': clean_str(row.get('ParceiroPadrao', '')),
                 'exige_nf': bool(row.get('ExigeNF', 1)), 'exige_cert': bool(row.get('ExigeCertificado', 1))
             }
+            if q and q not in normalizar(residuo_nome) and q not in normalizar(self.banco_dict[residuo_nome]['nome_nf']): continue
             tag = "evenrow" if row_num % 2 == 0 else "oddrow"
             self.bn_tbl.insert("", "end", iid=str(i), values=(residuo_nome, self.banco_dict[residuo_nome]['nome_nf'], self.banco_dict[residuo_nome]['codigo_item'], self.banco_dict[residuo_nome]['modo'], fmt_moeda(self.banco_dict[residuo_nome]['kg']), fmt_moeda(self.banco_dict[residuo_nome]['fechado']), fmt_kg(self.banco_dict[residuo_nome]['peso_unitario'])), tags=(tag,))
             row_num += 1
