@@ -2183,7 +2183,7 @@ btn_all.pack(side="left", padx=2)
 
 
 # Coluna 2 e 3: Busca (Ocupa 2 colunas) - Mantido Igual
-tb.Label(filtros, text="Busca (Parceiro/Pedido)").grid(row=row2, column=2, columnspan=2, sticky="w", padx=(0,5), pady=(0,2))
+tb.Label(filtros, text="Busca (Resíduo/Parceiro/Pedido)").grid(row=row2, column=2, columnspan=2, sticky="w", padx=(0,5), pady=(0,2))
 f_busca = tk.StringVar()
 tb.Entry(filtros, textvariable=f_busca).grid(row=row2+1, column=2, columnspan=2, sticky="ew", padx=(0,10), pady=(0, 10))
 
@@ -3400,6 +3400,9 @@ def aplicar_filtros(df):
             conditions.append(d["Parceiro"].str.lower().str.contains(q, na=False))
         if 'PedidoCompra' in d.columns: 
             conditions.append(d["PedidoCompra"].astype(str).str.contains(q, na=False))
+        q_norm = normalizar(q)
+        if 'Residuo' in d.columns and q_norm: 
+            conditions.append(d["Residuo"].astype(str).map(normalizar).str.contains(q_norm, regex=False))
         
         if conditions:
             final_condition = conditions[0]
