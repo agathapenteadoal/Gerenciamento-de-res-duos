@@ -558,6 +558,22 @@ EDITING_ID = None
 # App / Tema / Validação
 # =========================
 app = tb.Window(themename="yeti"); app.title("Gerenciamento de Resíduos"); app.geometry("1200x820"); app.minsize(1040, 720)
+
+def _erro_inesperado(exc_type, exc_value, exc_tb):
+    """Erros não tratados em botões/telas: grava no log e avisa o usuário em vez de falhar em silêncio."""
+    import logging, traceback
+    logging.error("Erro inesperado:\n" + "".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+    try:
+        ModernMessageBox.showerror("Erro inesperado", f"Ocorreu um erro e a ação pode não ter sido concluída.\n\nDetalhes: {exc_value}\n\n(O erro foi registrado em 'erros_sistema.log'.)")
+    except Exception:
+        pass
+app.report_callback_exception = _erro_inesperado
+
+def detalhe_erro_db(padrao):
+    """Mensagem do último erro do banco de dados (ou a mensagem padrão, se não houver)."""
+    msg = getattr(db, "ultimo_erro", "") or padrao
+    db.ultimo_erro = ""
+    return msg
 app.option_add('*Calendar.TLabel.foreground', '#000000')  # Força texto preto
 app.option_add('*Calendar.TLabel.background', '#cccccc')  # Força fundo cinza
 try:
@@ -1517,7 +1533,7 @@ def abrir_janela_lote():
         if sucessos > 0:
             ModernMessageBox.showinfo("Sucesso", f"{sucessos} registros salvos!"); lote_win.destroy(); atualizar_views()
         else:
-            ModernMessageBox.showerror("Erro", "Nenhum registro foi salvo. Verifique o console para detalhes.")
+            ModernMessageBox.showerror("Erro", "Nenhum registro foi salvo.\n\n" + detalhe_erro_db("Erro no banco de dados."))
             
     # --- 1. LINHA DIVISÓRIA ---
     tb.Separator(lote_win).pack(fill="x", padx=15, pady=(15, 5))
@@ -1694,8 +1710,8 @@ def adicionar_transporte_event(_=None):
         else:
             # Se falhar, agora vai mostrar o erro real
             ModernMessageBox.showerror("Erro de Banco de Dados", 
-                               "Não foi possível salvar o registro.\n\n"
-                               "Verifique se o arquivo 'residuos_db.sqlite' não está aberto em outro programa ou se o console exibe erros de coluna.")
+                               "Não foi possível salvar o registro.\n\n" + detalhe_erro_db(
+                               "Verifique se o arquivo 'residuos_db.sqlite' não está aberto em outro programa."))
 
     except Exception as e: 
         ModernMessageBox.showerror("Erro Crítico", f"Erro ao adicionar transporte: {e}")
@@ -3200,11 +3216,11 @@ def abrir_janela_gerenciar_residuo(nome_antigo=None):
         if is_edit_mode:
             if db.update_residuo(nome_antigo, nome_novo, nome_nf_novo, codigo_item_novo, codigo_ibama_novo, modo_novo, val_kg, val_fec, val_pu, calcula_rateio_novo, p_estado, p_dest, p_tipo, p_parc, grupo_novo, v_exige_nf, v_exige_cert):
                 success = True; set_status(f"Resíduo '{nome_novo}' atualizado.")
-            else: ModernMessageBox.showerror("Erro", "Não foi possível atualizar.", parent=edit_window)
+            else: ModernMessageBox.showerror("Erro", detalhe_erro_db("Não foi possível atualizar."), parent=edit_window)
         else:
             if db.add_residuo(nome_novo, nome_nf_novo, codigo_item_novo, codigo_ibama_novo, modo_novo, val_kg, val_fec, val_pu, calcula_rateio_novo, p_estado, p_dest, p_tipo, p_parc, grupo_novo, v_exige_nf, v_exige_cert):
                 success = True; set_status(f"Resíduo '{nome_novo}' adicionado.")
-            else: ModernMessageBox.showerror("Erro", "Não foi possível adicionar.", parent=edit_window)
+            else: ModernMessageBox.showerror("Erro", detalhe_erro_db("Não foi possível adicionar."), parent=edit_window)
 
         if success:
             if is_edit_mode:
@@ -3212,7 +3228,7 @@ def abrir_janela_gerenciar_residuo(nome_antigo=None):
                 msg = f"As regras de compliance para '{nome_novo}' foram salvas.\nDeseja atualizar TODOS os registros passados com essas novas regras?"
                 if ModernMessageBox.askyesno("Atualizar Histórico?", msg, parent=edit_window):
                     if db.update_compliance_historico(nome_novo, nf_bool, cert_bool): ModernMessageBox.showinfo("Sucesso", "Registros atualizados!", parent=edit_window)
-                    else: ModernMessageBox.showerror("Erro", "Falha ao atualizar.", parent=edit_window)
+                    else: ModernMessageBox.showerror("Erro", detalhe_erro_db("Falha ao atualizar."), parent=edit_window)
             edit_window.destroy(); preencher_banco_tabela(); sincronizar_residuos_ui(); atualizar_views()
             
     btn_cancelar = tb.Button(frame_btns, text="Cancelar", command=edit_window.destroy, bootstyle=SECONDARY)
@@ -3848,12 +3864,12 @@ def abrir_janela_gerenciar_parceiro(nome_antigo=None):
             if db.update_parceiro(nome_antigo, nome_novo, tipo_novo, cnpj_novo): 
                 success = True; set_status("Atualizado.")
             else: 
-                ModernMessageBox.showerror("Erro", "Falha ao atualizar.", parent=edit_window)
+                ModernMessageBox.showerror("Erro", detalhe_erro_db("Falha ao atualizar."), parent=edit_window)
         else:
             if db.add_parceiro(nome_novo, tipo_novo, cnpj_novo): 
                 success = True; set_status("Adicionado.")
             else: 
-                ModernMessageBox.showerror("Erro", "Falha ao adicionar.", parent=edit_window)
+                ModernMessageBox.showerror("Erro", detalhe_erro_db("Falha ao adicionar."), parent=edit_window)
 
         if success: 
             edit_window.destroy()
@@ -3964,13 +3980,13 @@ def abrir_janela_gerenciar_analise(nome_antigo=None):
                 success = True
                 set_status(f"Análise '{nome_novo}' atualizada.")
             else:
-                ModernMessageBox.showerror("Erro ao Salvar", "Não foi possível atualizar a análise.", parent=edit_window)
+                ModernMessageBox.showerror("Erro ao Salvar", detalhe_erro_db("Não foi possível atualizar a análise."), parent=edit_window)
         else:
             if db.add_analise(nome_novo, float(valor_novo)):
                 success = True
                 set_status(f"Análise '{nome_novo}' adicionada.")
             else:
-                 ModernMessageBox.showerror("Erro ao Salvar", "Não foi possível adicionar a análise.", parent=edit_window)
+                 ModernMessageBox.showerror("Erro ao Salvar", detalhe_erro_db("Não foi possível adicionar a análise."), parent=edit_window)
 
         if success:
             edit_window.destroy()
@@ -4049,7 +4065,7 @@ def banco_edit_grupo_lote():
             sincronizar_residuos_ui()
             ModernMessageBox.showinfo("Sucesso", f"Grupo '{novo_grupo}' aplicado em {sucessos} resíduo(s)!")
         else:
-            ModernMessageBox.showerror("Erro", "Não foi possível atualizar os resíduos.")
+            ModernMessageBox.showerror("Erro", "Não foi possível atualizar os resíduos.\n\n" + detalhe_erro_db(""))
 
     frame_btns = tb.Frame(janela_lote)
     frame_btns.pack(pady=15)
@@ -5908,7 +5924,9 @@ def submit_registro_event(_=None):
         foi_edicao = (EDITING_ID is not None)
         
         if foi_edicao: 
-            db.update_registro(EDITING_ID, data_full_para_db)
+            if not db.update_registro(EDITING_ID, data_full_para_db):
+                ModernMessageBox.showerror("Erro ao Salvar", "O registro NÃO foi atualizado.\n\n" + detalhe_erro_db("Erro no banco de dados."))
+                return
             
             # GAMBIARRA SEGURA: Se o update_registro original não aceita NF (tem 16 campos e não 17),
             # fazemos um update extra só para garantir a NF.
@@ -5919,6 +5937,9 @@ def submit_registro_event(_=None):
         else: 
             # Insere novo
             new_id = db.add_registro(data_full_para_db)
+            if not new_id or new_id == -1:
+                ModernMessageBox.showerror("Erro ao Salvar", "O registro NÃO foi salvo.\n\n" + detalhe_erro_db("Erro no banco de dados."))
+                return
             
             # GAMBIARRA SEGURA: Atualiza a NF logo em seguida para o ID criado
             if new_id and new_id != -1 and hasattr(db, 'update_nf'):
@@ -6198,17 +6219,19 @@ def alterar_exigencias_lote():
                     nf_status = "N/A"
 
                 # Atualiza no banco de dados
-                db.update_certificado(rid, cert_status)
-                if hasattr(db, 'update_nf'): 
-                    db.update_nf(rid, nf_status)
-                    
-                sucessos += 1
+                ok_cert = db.update_certificado(rid, cert_status)
+                ok_nf = db.update_nf(rid, nf_status) if hasattr(db, 'update_nf') else True
+                if ok_cert and ok_nf: sucessos += 1
             except Exception as e:
-                print(f"Erro ao atualizar exigência {rid}: {e}")
+                db._registrar_erro(f"Erro ao atualizar exigência {rid}: {e}")
 
         janela_lote.destroy()
         atualizar_views()
-        ModernMessageBox.showinfo("Sucesso", f"Regras aplicadas em {sucessos} registro(s)!")
+        falhas = len(selecionados) - sucessos
+        if falhas:
+            ModernMessageBox.showwarning("Atenção", f"Regras aplicadas em {sucessos} registro(s).\n{falhas} registro(s) NÃO foram atualizados.\n\n" + detalhe_erro_db(""))
+        else:
+            ModernMessageBox.showinfo("Sucesso", f"Regras aplicadas em {sucessos} registro(s)!")
 
     frame_btns = tb.Frame(janela_lote)
     frame_btns.pack(pady=15)
@@ -6726,7 +6749,7 @@ def importar_pdfs_tickets(file_paths, parceiro, data_db_fmt, tipo, destinacao):
     if pdfs_processados > 0:
         atualizar_views()
         msg = f"Processado. {sucesso_total} itens importados."
-        if erros_total > 0: msg += f"\nAlguns erros ocorreram (ver console)."
+        if erros_total > 0: msg += f"\nAlguns itens NÃO foram importados.\n" + detalhe_erro_db("Detalhes em 'erros_sistema.log'.")
         ModernMessageBox.showinfo("Importação", msg)
     else:
         ModernMessageBox.showwarning("Erro", "Nenhum arquivo processado corretamente.")

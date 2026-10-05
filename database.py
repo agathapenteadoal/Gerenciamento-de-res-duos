@@ -28,6 +28,14 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+# Guarda a mensagem do último erro para que as telas possam mostrá-la ao usuário
+ultimo_erro = ""
+
+def _registrar_erro(msg):
+    global ultimo_erro
+    ultimo_erro = msg
+    logging.error(msg)
+
 getcontext().prec = 28
 Q2 = Decimal("0.01")
 def _dec(s, default=Decimal("0")):
@@ -194,7 +202,7 @@ def add_registro(data_full):
     sql = f"INSERT INTO registros ({', '.join(col_names)}) VALUES ({placeholders})"
 
     if len(data_full) != len(col_names):
-         print(f"Erro em add_registro: Número incorreto de valores fornecidos. Esperado: {len(col_names)}, Recebido: {len(data_full)}")
+         _registrar_erro(f"Erro em add_registro: Número incorreto de valores fornecidos. Esperado: {len(col_names)}, Recebido: {len(data_full)}")
          conn.close()
          return -1 
 
@@ -203,7 +211,7 @@ def add_registro(data_full):
         conn.commit()
         last_id = cursor.lastrowid
     except Exception as e:
-        print(f"Erro em add_registro: {e}")
+        _registrar_erro(f"Erro em add_registro: {e}")
         conn.rollback()
     finally:
         conn.close()
@@ -215,15 +223,17 @@ def update_registro(id, data_full):
     sql = f"UPDATE registros SET {', '.join(col_updates)} WHERE id = ?"
 
     if len(data_full) != len(col_updates):
-         print(f"Erro em update_registro: Número incorreto de valores fornecidos. Esperado: {len(col_updates)}, Recebido: {len(data_full)}")
-         conn.close(); return
+         _registrar_erro(f"Erro em update_registro: Número incorreto de valores fornecidos. Esperado: {len(col_updates)}, Recebido: {len(data_full)}")
+         conn.close(); return False
 
     try:
         cursor.execute(sql, data_full + [id]) 
         conn.commit()
+        return True
     except Exception as e:
-        print(f"Erro em update_registro para ID {id}: {e}")
+        _registrar_erro(f"Erro em update_registro para ID {id}: {e}")
         conn.rollback()
+        return False
     finally:
         conn.close()
 
@@ -234,7 +244,7 @@ def delete_residuo(nome):
         conn.commit()
         success = True
     except Exception as e:
-        print(f"Erro em delete_residuo: {e}")
+        _registrar_erro(f"Erro em delete_residuo: {e}")
         conn.rollback()
     finally:
         conn.close()
@@ -254,7 +264,7 @@ def get_all_registros_df(data_inicio=None):
         if 'PesoEmKg' not in df.columns: df['PesoEmKg'] = 0.0 
 
     except Exception as e:
-        print(f"Erro em get_all_registros_df: {e}")
+        _registrar_erro(f"Erro em get_all_registros_df: {e}")
         df = pd.DataFrame(columns=expected_cols[1:]) 
         df.index.name = 'id'
     finally:
@@ -276,8 +286,10 @@ def update_certificado(id, novo_status):
     try:
         cursor.execute("UPDATE registros SET CertificadoOK = ? WHERE id = ?", (novo_status, id))
         conn.commit()
+        return True
     except Exception as e:
-        print(f"Erro em update_certificado para ID {id}: {e}"); conn.rollback()
+        _registrar_erro(f"Erro em update_certificado para ID {id}: {e}"); conn.rollback()
+        return False
     finally:
         conn.close()
         
@@ -294,7 +306,7 @@ def update_nf(registro_id, status_nf):
         conn.close()
         return True
     except Exception as e:
-        print(f"Erro ao atualizar NF: {e}")
+        _registrar_erro(f"Erro ao atualizar NF: {e}")
         return False
 
 # --- CRUD Apoio ---
@@ -304,7 +316,7 @@ def get_banco_residuos():
     df = pd.DataFrame(columns=df_cols)
     try:
         df = pd.read_sql_query("SELECT " + ", ".join(df_cols) + " FROM residuos ORDER BY Residuo", conn)
-    except Exception as e: print(f"Erro em get_banco_residuos: {e}")
+    except Exception as e: _registrar_erro(f"Erro em get_banco_residuos: {e}")
     finally: conn.close()
     return df
 
@@ -316,8 +328,8 @@ def add_residuo(nome, nome_nf, codigo_item, codigo_ibama, modo, val_kg, val_fec,
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (nome, nome_nf, codigo_item, codigo_ibama, modo, val_kg, val_fec, peso_unit_kg, int(calcula_rateio), estado, dest, tipo, parc, grupo, int(exige_nf), int(exige_cert)))
         conn.commit(); success=True
-    except sqlite3.IntegrityError: print(f"Resíduo '{nome}' já existe.")
-    except Exception as e: print(f"Erro em add_residuo: {e}"); conn.rollback()
+    except sqlite3.IntegrityError: _registrar_erro(f"Já existe um resíduo cadastrado com o nome '{nome}'.")
+    except Exception as e: _registrar_erro(f"Erro em add_residuo: {e}"); conn.rollback()
     finally: conn.close(); return success
 
 def update_residuo(nome_antigo, nome_novo, nome_nf, codigo_item, codigo_ibama, modo, val_kg, val_fec, peso_unit_kg, calcula_rateio, estado, dest, tipo, parc, grupo, exige_nf, exige_cert): 
@@ -331,8 +343,8 @@ def update_residuo(nome_antigo, nome_novo, nome_nf, codigo_item, codigo_ibama, m
             WHERE Residuo = ?
             """, (nome_novo, nome_nf, codigo_item, codigo_ibama, modo, val_kg, val_fec, peso_unit_kg, int(calcula_rateio), estado, dest, tipo, parc, grupo, int(exige_nf), int(exige_cert), nome_antigo))
         conn.commit(); success=True
-    except sqlite3.IntegrityError: conn.rollback(); print(f"Erro: Resíduo '{nome_novo}' já existe.")
-    except Exception as e: print(f"Erro em update_residuo: {e}"); conn.rollback()
+    except sqlite3.IntegrityError: conn.rollback(); _registrar_erro(f"Já existe um resíduo cadastrado com o nome '{nome_novo}'.")
+    except Exception as e: _registrar_erro(f"Erro em update_residuo: {e}"); conn.rollback()
     finally: conn.close(); return success
 
 def delete_registro(id):
@@ -342,7 +354,7 @@ def delete_registro(id):
         conn.commit()
         success = True
     except Exception as e:
-        print(f"Erro em delete_registro para ID {id}: {e}"); conn.rollback()
+        _registrar_erro(f"Erro em delete_registro para ID {id}: {e}"); conn.rollback()
     finally:
         conn.close()
     return success
@@ -354,7 +366,7 @@ def get_banco_parceiros():
     try:
         df = pd.read_sql_query("SELECT Parceiro, TipoParceiro, CNPJ FROM parceiros ORDER BY Parceiro", conn)
     except Exception as e:
-        print(f"AVISO em get_banco_parceiros (tentativa 1): {e}")
+        _registrar_erro(f"AVISO em get_banco_parceiros (tentativa 1): {e}")
         print(" -> Tentando query de fallback (somente Parceiro)...")
         try:
             df_old = pd.read_sql_query("SELECT Parceiro FROM parceiros ORDER BY Parceiro", conn)
@@ -362,7 +374,7 @@ def get_banco_parceiros():
             df_old['CNPJ'] = ''
             df = df_old 
         except Exception as e_fallback:
-            print(f"ERRO CRÍTICO em get_banco_parceiros (fallback): {e_fallback}")
+            _registrar_erro(f"ERRO CRÍTICO em get_banco_parceiros (fallback): {e_fallback}")
     finally:
         conn.close()
 
@@ -377,9 +389,9 @@ def add_parceiro(nome, tipo, cnpj):
         cursor.execute("INSERT INTO parceiros (Parceiro, TipoParceiro, CNPJ) VALUES (?, ?, ?)", (nome, tipo, cnpj))
         conn.commit(); success=True
     except sqlite3.IntegrityError: 
-        print(f"Parceiro '{nome}' já existe."); conn.rollback()
+        _registrar_erro(f"Já existe um parceiro cadastrado com o nome '{nome}'."); conn.rollback()
     except Exception as e: 
-        print(f"Erro em add_parceiro: {e}"); conn.rollback()
+        _registrar_erro(f"Erro em add_parceiro: {e}"); conn.rollback()
     finally: 
         conn.close()
     return success
@@ -389,21 +401,21 @@ def update_parceiro(nome_antigo, nome_novo, tipo_novo, cnpj_novo):
     try: 
         cursor.execute("UPDATE parceiros SET Parceiro = ?, TipoParceiro = ?, CNPJ = ? WHERE Parceiro = ?", (nome_novo, tipo_novo, cnpj_novo, nome_antigo))
         conn.commit(); success=True
-    except sqlite3.IntegrityError: print(f"Erro: Parceiro '{nome_novo}' já existe."); conn.rollback()
-    except Exception as e: print(f"Erro em update_parceiro: {e}"); conn.rollback()
+    except sqlite3.IntegrityError: _registrar_erro(f"Já existe um parceiro cadastrado com o nome '{nome_novo}'."); conn.rollback()
+    except Exception as e: _registrar_erro(f"Erro em update_parceiro: {e}"); conn.rollback()
     finally: conn.close(); return success
 
 def delete_parceiro(nome):
     conn=connect_db(); cursor=conn.cursor(); success=False
     try: cursor.execute("DELETE FROM parceiros WHERE Parceiro = ?", (nome,)); conn.commit(); success=True
-    except Exception as e: print(f"Erro em delete_parceiro: {e}"); conn.rollback()
+    except Exception as e: _registrar_erro(f"Erro em delete_parceiro: {e}"); conn.rollback()
     finally: conn.close(); return success
 
 def get_banco_analises():
     conn = connect_db()
     df = pd.DataFrame(columns=['NomeAnalise', 'ValorPadrao'])
     try: df = pd.read_sql_query("SELECT NomeAnalise, ValorPadrao FROM analises ORDER BY NomeAnalise", conn)
-    except Exception as e: print(f"Erro em get_banco_analises: {e}")
+    except Exception as e: _registrar_erro(f"Erro em get_banco_analises: {e}")
     finally: conn.close()
     return df
 
@@ -412,8 +424,8 @@ def add_analise(nome, valor_padrao):
     try:
         cursor.execute("INSERT INTO analises (NomeAnalise, ValorPadrao) VALUES (?, ?)", (nome, valor_padrao))
         conn.commit(); success=True
-    except sqlite3.IntegrityError: print(f"Análise '{nome}' já existe.") 
-    except Exception as e: print(f"Erro em add_analise: {e}"); conn.rollback()
+    except sqlite3.IntegrityError: _registrar_erro(f"Já existe uma análise cadastrada com o nome '{nome}'.") 
+    except Exception as e: _registrar_erro(f"Erro em add_analise: {e}"); conn.rollback()
     finally: conn.close()
     return success
 
@@ -423,15 +435,15 @@ def update_analise(nome_antigo, nome_novo, valor_padrao):
         cursor.execute("UPDATE analises SET NomeAnalise = ?, ValorPadrao = ? WHERE NomeAnalise = ?", (nome_novo, valor_padrao, nome_antigo))
         conn.commit(); success=True
     except sqlite3.IntegrityError:
-        conn.rollback(); print(f"Erro: Análise '{nome_novo}' já existe ou outra violação.")
-    except Exception as e: print(f"Erro em update_analise: {e}"); conn.rollback()
+        conn.rollback(); _registrar_erro(f"Já existe uma análise cadastrada com o nome '{nome_novo}'.")
+    except Exception as e: _registrar_erro(f"Erro em update_analise: {e}"); conn.rollback()
     finally: conn.close()
     return success
 
 def delete_analise(nome):
     conn=connect_db(); cursor=conn.cursor(); success=False
     try: cursor.execute("DELETE FROM analises WHERE NomeAnalise = ?", (nome,)); conn.commit(); success=True
-    except Exception as e: print(f"Erro em delete_analise: {e}"); conn.rollback()
+    except Exception as e: _registrar_erro(f"Erro em delete_analise: {e}"); conn.rollback()
     finally: conn.close(); return success
 
 def add_or_update_metragem(mes_ano, metragem):
@@ -446,7 +458,7 @@ def add_or_update_metragem(mes_ano, metragem):
         c = conn.cursor()
         c.execute(sql, (mes_ano, float(metragem)))
         conn.commit(); return True
-    except Exception as e: print(f"Erro em add_or_update_metragem: {e}"); return False
+    except Exception as e: _registrar_erro(f"Erro em add_or_update_metragem: {e}"); return False
     finally: conn.close()
 
 def get_metragem(mes_ano):
@@ -459,7 +471,7 @@ def get_metragem(mes_ano):
         result = c.fetchone()
         if result: return float(result[0])
         else: return 0.0
-    except Exception as e: print(f"Erro em get_metragem: {e}"); return 0.0
+    except Exception as e: _registrar_erro(f"Erro em get_metragem: {e}"); return 0.0
     finally: conn.close()
 
 # --- Função Pendências ---
@@ -483,7 +495,7 @@ def get_pending_certificates(days_threshold=30):
         if not df_temp.empty:
             df_temp['Data'] = pd.to_datetime(df_temp['Data'], errors='coerce')
             df = df_temp 
-    except Exception as e: print(f"Erro em get_pending_certificates: {e}")
+    except Exception as e: _registrar_erro(f"Erro em get_pending_certificates: {e}")
     finally:
         if conn: conn.close()
     return df
@@ -503,7 +515,7 @@ def update_compliance_historico(residuo, exige_nf, exige_cert):
             
         conn.commit()
         return True
-    except Exception as e: print(f"Erro update historico: {e}"); return False
+    except Exception as e: _registrar_erro(f"Erro update historico: {e}"); return False
     finally: conn.close()
 
 # =========================================================
@@ -517,7 +529,7 @@ def add_pdf_mapping(pdf_text, residuo_sistema):
         cursor.execute("INSERT OR REPLACE INTO pdf_mapping (pdf_text_original, residuo_sistema) VALUES (?, ?)", 
                   (text_clean, residuo_sistema))
         conn.commit(); return True
-    except sqlite3.Error as e: print(f"Erro DB Mapping: {e}"); return False
+    except sqlite3.Error as e: _registrar_erro(f"Erro DB Mapping: {e}"); return False
     finally: conn.close()
 
 def get_residuo_from_pdf_mapping(pdf_text):
@@ -638,7 +650,7 @@ def renomear_residuo_em_massa(nome_antigo, nome_novo):
         conn.commit()
         return True
     except Exception as e:
-        print(f"Erro ao renomear resíduo no banco: {e}")
+        _registrar_erro(f"Erro ao renomear resíduo no banco: {e}")
         return False
     finally:
         conn.close()
