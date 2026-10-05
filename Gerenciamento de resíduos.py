@@ -7685,31 +7685,12 @@ atualizar_tabela_metragem()
 def realizar_backup_e_fechar():
     """Cria uma cópia do banco ao fechar e encerra o programa."""
     try:
-        # 1. Cria a pasta de backups se não existir
-        pasta_backup = "Backups"
-        if not os.path.exists(pasta_backup):
-            os.makedirs(pasta_backup)
-            
-        # 2. Define nomes dos arquivos
-        # Nome do banco original (confirme se é este nome mesmo no seu projeto)
-        arquivo_origem = "residuos_db.sqlite" 
-        
-        # Nome do destino com Data e Hora (ex: backup_2025-01-15_18-30.sqlite)
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        arquivo_destino = os.path.join(pasta_backup, f"backup_{timestamp}.sqlite")
-        
-        # 3. Faz a cópia
-        if os.path.exists(arquivo_origem):
-            shutil.copy2(arquivo_origem, arquivo_destino)
-            print(f"Backup de segurança criado em: {arquivo_destino}")
-            
-            # (Opcional) Limpeza: Mantém apenas os últimos 50 backups para não encher o disco
-            lista_backups = sorted([os.path.join(pasta_backup, f) for f in os.listdir(pasta_backup)], key=os.path.getmtime)
-            while len(lista_backups) > 50:
-                os.remove(lista_backups.pop(0))
-                
+        # 1 cópia por dia na pasta "Backups", guardando os últimos 60 dias (ver backup.py)
+        from backup import fazer_backup_diario
+        fazer_backup_diario(db.DB_FILE)
     except Exception as e:
         # Se der erro no backup, avisa mas deixa fechar o programa
+        db._registrar_erro(f"Erro no backup automático: {e}")
         ModernMessageBox.showwarning("Aviso de Backup", f"Não foi possível criar o backup automático:\n{e}")
 
     # 4. Encerra o programa
