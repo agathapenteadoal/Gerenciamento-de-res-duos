@@ -2502,6 +2502,12 @@ btn_bn_lote.pack(side="left", padx=6) # Adiciona na tela
 btn_bn_edit.pack(side="left", padx=6)
 btn_bn_add.pack(side="left", padx=0)
 
+# --- Busca por nome do resíduo ---
+bn_busca = tk.StringVar()
+tb.Entry(bn_actions, textvariable=bn_busca, width=30).pack(side="right", padx=(0, 6))
+tb.Label(bn_actions, text="Buscar resíduo:").pack(side="right", padx=(0, 6))
+bn_busca.trace_add("write", lambda *_: preencher_banco_tabela())
+
 bn_card = tb.Labelframe(aba_banco, text="Resíduos cadastrados", padding=6, bootstyle=INFO)
 bn_card.pack(fill="both", expand=True, pady=(10,0)); bn_card.rowconfigure(0, weight=1); bn_card.columnconfigure(0, weight=1)
 
@@ -3519,6 +3525,7 @@ def preencher_banco_tabela():
     df_banco = db.get_banco_residuos() 
     banco_dict.clear()
     for r in bn_tbl.get_children(): bn_tbl.delete(r)
+    q = normalizar(bn_busca.get())
         
     row_num = 0
     for i, row in df_banco.iterrows():
@@ -3543,6 +3550,7 @@ def preencher_banco_tabela():
             'exige_cert': bool(row.get('ExigeCertificado', 1))
         }
         banco_dict[residuo_nome] = residuo_data 
+        if q and q not in normalizar(residuo_nome) and q not in normalizar(residuo_data['nome_nf']): continue
 
         values_display = (
             residuo_nome,
