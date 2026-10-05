@@ -558,6 +558,22 @@ EDITING_ID = None
 # App / Tema / Validação
 # =========================
 app = tb.Window(themename="yeti"); app.title("Gerenciamento de Resíduos"); app.geometry("1200x820"); app.minsize(1040, 720)
+
+def _erro_inesperado(exc_type, exc_value, exc_tb):
+    """Erros não tratados em botões/telas: grava no log e avisa o usuário em vez de falhar em silêncio."""
+    import logging, traceback
+    logging.error("Erro inesperado:\n" + "".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+    try:
+        ModernMessageBox.showerror("Erro inesperado", f"Ocorreu um erro e a ação pode não ter sido concluída.\n\nDetalhes: {exc_value}\n\n(O erro foi registrado em 'erros_sistema.log'.)")
+    except Exception:
+        pass
+app.report_callback_exception = _erro_inesperado
+
+def detalhe_erro_db(padrao):
+    """Mensagem do último erro do banco de dados (ou a mensagem padrão, se não houver)."""
+    msg = getattr(db, "ultimo_erro", "") or padrao
+    db.ultimo_erro = ""
+    return msg
 app.option_add('*Calendar.TLabel.foreground', '#000000')  # Força texto preto
 app.option_add('*Calendar.TLabel.background', '#cccccc')  # Força fundo cinza
 try:
@@ -1517,7 +1533,7 @@ def abrir_janela_lote():
         if sucessos > 0:
             ModernMessageBox.showinfo("Sucesso", f"{sucessos} registros salvos!"); lote_win.destroy(); atualizar_views()
         else:
-            ModernMessageBox.showerror("Erro", "Nenhum registro foi salvo. Verifique o console para detalhes.")
+            ModernMessageBox.showerror("Erro", "Nenhum registro foi salvo.\n\n" + detalhe_erro_db("Erro no banco de dados."))
             
     # --- 1. LINHA DIVISÓRIA ---
     tb.Separator(lote_win).pack(fill="x", padx=15, pady=(15, 5))
@@ -1694,8 +1710,8 @@ def adicionar_transporte_event(_=None):
         else:
             # Se falhar, agora vai mostrar o erro real
             ModernMessageBox.showerror("Erro de Banco de Dados", 
-                               "Não foi possível salvar o registro.\n\n"
-                               "Verifique se o arquivo 'residuos_db.sqlite' não está aberto em outro programa ou se o console exibe erros de coluna.")
+                               "Não foi possível salvar o registro.\n\n" + detalhe_erro_db(
+                               "Verifique se o arquivo 'residuos_db.sqlite' não está aberto em outro programa."))
 
     except Exception as e: 
         ModernMessageBox.showerror("Erro Crítico", f"Erro ao adicionar transporte: {e}")
@@ -2105,7 +2121,7 @@ parc_menu.grid(row=row1+1, column=0, sticky="ew", padx=(0,10), pady=(0, 10))
 # Coluna 1: Resíduo
 tb.Label(filtros, text="Resíduo").grid(row=row1, column=1, sticky="w", padx=(0,5), pady=(0,2))
 f_res = tk.StringVar(value="Todos")
-res_menu = tb.Combobox(filtros, textvariable=f_res, values=["Todos"] + banco_residuos, state="readonly")
+res_menu = tb.Combobox(filtros, textvariable=f_res, values=["Todos"] + banco_residuos, state="normal")
 res_menu.grid(row=row1+1, column=1, sticky="ew", padx=(0,10), pady=(0, 10))
 
 # Coluna 2: Estado
@@ -2183,7 +2199,7 @@ btn_all.pack(side="left", padx=2)
 
 
 # Coluna 2 e 3: Busca (Ocupa 2 colunas) - Mantido Igual
-tb.Label(filtros, text="Busca (Parceiro/Pedido)").grid(row=row2, column=2, columnspan=2, sticky="w", padx=(0,5), pady=(0,2))
+tb.Label(filtros, text="Busca (Resíduo/Parceiro/Pedido)").grid(row=row2, column=2, columnspan=2, sticky="w", padx=(0,5), pady=(0,2))
 f_busca = tk.StringVar()
 tb.Entry(filtros, textvariable=f_busca).grid(row=row2+1, column=2, columnspan=2, sticky="ew", padx=(0,10), pady=(0, 10))
 
@@ -2212,9 +2228,11 @@ cols_numericas = ["Peso", "Valor por kg", "Valor fechado", "Transporte", "Valor 
 # Colunas que devem ficar CENTRADAS (Status/Datas)
 cols_centro = ["Data", "Parceiro", "Resíduo", "Estado", "Destinação", "Tipo", "Certificado OK", "NF OK"]
 
+TITULOS_TABELA = {}
 for c in colunas_tv:
     header_name = c
     if c == "Valor por kg": header_name = "R$/kg" # Encurta o título
+    TITULOS_TABELA[c] = header_name
     
     # Define o alinhamento baseado no tipo de dado
     if c in cols_numericas:
@@ -2224,7 +2242,7 @@ for c in colunas_tv:
     else:
         meu_anchor = "center" # West (Esquerda) - Padrão para texto
         
-    tabela.heading(c, text=header_name, command=lambda col=c: ordenar_coluna(col, False))
+    tabela.heading(c, text=header_name, command=lambda col=c: ordenar_coluna(col))
     tabela.column(c, width=larg.get(c, 100), anchor=meu_anchor, stretch=True)
 
 # --- ADICIONADO: StringVar para o resumo da seleção ---
@@ -2441,7 +2459,7 @@ btn_export.pack(side="right")
 
 btn_pdf = tb.Button(header_tbl, text="Relatório PDF", bootstyle="danger-outline", cursor="hand2")
 btn_pdf.pack(side="right", padx=0)
-btn_sinir = tb.Button(header_tbl, text="Exportar p/ SINIR", bootstyle="info", cursor="hand2")
+btn_sinir = tb.Button(header_tbl, text="DMR / SINIR", bootstyle="info", cursor="hand2")
 btn_sinir.pack(side="right", padx=(0, 10))
 
 # Tabela
@@ -2502,10 +2520,19 @@ btn_bn_lote.pack(side="left", padx=6) # Adiciona na tela
 btn_bn_edit.pack(side="left", padx=6)
 btn_bn_add.pack(side="left", padx=0)
 
+# --- Busca por nome do resíduo ---
+bn_busca = tk.StringVar()
+bn_so_sem_ibama = tk.BooleanVar(value=False)
+tb.Checkbutton(bn_actions, text="Só sem código IBAMA", variable=bn_so_sem_ibama, bootstyle="round-toggle",
+               command=lambda: preencher_banco_tabela()).pack(side="right", padx=(10, 0))
+tb.Entry(bn_actions, textvariable=bn_busca, width=30).pack(side="right", padx=(0, 6))
+tb.Label(bn_actions, text="Buscar resíduo:").pack(side="right", padx=(0, 6))
+bn_busca.trace_add("write", lambda *_: preencher_banco_tabela())
+
 bn_card = tb.Labelframe(aba_banco, text="Resíduos cadastrados", padding=6, bootstyle=INFO)
 bn_card.pack(fill="both", expand=True, pady=(10,0)); bn_card.rowconfigure(0, weight=1); bn_card.columnconfigure(0, weight=1)
 
-bn_cols = ("Resíduo (Interno)", "Nome p/ NF", "Código Item", "Modo Padrão", "Valor/kg Padrão", "Valor Fechado Padrão", "Peso/Unidade Padrão")
+bn_cols = ("Resíduo", "Código IBAMA", "Nome item (NF)", "Código item", "Destinação padrão", "Valor padrão")
 
 # --- MUDOU PARA EXTENDED ---
 bn_tbl = ttk.Treeview(bn_card, columns=bn_cols, show="headings", selectmode="extended")
@@ -2514,13 +2541,13 @@ bn_tbl.grid(row=0, column=0, sticky="nsew")
 bn_sy = ttk.Scrollbar(bn_card, orient="vertical", command=bn_tbl.yview); bn_tbl.configure(yscroll=bn_sy.set); bn_sy.grid(row=0, column=1, sticky="ns")
 
 # --- Configuração das Novas Colunas (Centralizadas) ---
-bn_tbl.heading("Resíduo (Interno)", text="Resíduo"); bn_tbl.column("Resíduo (Interno)", width=180, anchor="center", stretch=True)
-bn_tbl.heading("Nome p/ NF", text="Nome item"); bn_tbl.column("Nome p/ NF", width=220, anchor="center", stretch=True)
-bn_tbl.heading("Código Item", text="Código Item"); bn_tbl.column("Código Item", width=100, anchor="center", stretch=False)
-bn_tbl.heading("Modo Padrão", text="Modo"); bn_tbl.column("Modo Padrão", width=80, anchor="center", stretch=False)
-bn_tbl.heading("Valor/kg Padrão", text="Valor/kg (R$)"); bn_tbl.column("Valor/kg Padrão", width=120, anchor="center", stretch=False)
-bn_tbl.heading("Valor Fechado Padrão", text="Valor Fechado (R$)"); bn_tbl.column("Valor Fechado Padrão", width=140, anchor="center", stretch=False)
-bn_tbl.heading("Peso/Unidade Padrão", text="Peso/Unid. (kg)"); bn_tbl.column("Peso/Unidade Padrão", width=120, anchor="center", stretch=False)
+for c, w, a, estica in (("Resíduo", 220, "w", True), ("Código IBAMA", 135, "center", False),
+                        ("Nome item (NF)", 260, "w", True), ("Código item", 115, "center", False),
+                        ("Destinação padrão", 170, "center", False), ("Valor padrão", 190, "e", False)):
+    bn_tbl.heading(c, text=c); bn_tbl.column(c, width=w, anchor=a, stretch=estica)
+bn_tbl.tag_configure("sem_ibama", foreground="#cc0000")
+bn_tbl.tag_configure("fora_dmr", foreground="#888888")
+bn_tbl.bind("<Double-1>", lambda e: banco_edit_wrapper())  # Dois cliques abrem a edição
 
 # =========================
 # ABA  5 - Dados (UI Formatada)
@@ -3122,6 +3149,7 @@ def abrir_janela_gerenciar_residuo(nome_antigo=None):
     rateio_var = tk.IntVar(value= 1 if dados_atuais.get('calcula_rateio', 0) else 0)
     exige_nf_var = tk.IntVar(value=1 if not is_edit_mode else int(dados_atuais.get('exige_nf', 1)))
     exige_cert_var = tk.IntVar(value=1 if not is_edit_mode else int(dados_atuais.get('exige_cert', 1)))
+    entra_dmr_var = tk.IntVar(value=1 if dados_atuais.get('entra_dmr', True) else 0)
     
     padrao_estado_var = tk.StringVar(value=dados_atuais.get('estado_padrao', ''))
     padrao_dest_var = tk.StringVar(value=dados_atuais.get('destinacao_padrao', ''))
@@ -3164,6 +3192,9 @@ def abrir_janela_gerenciar_residuo(nome_antigo=None):
     tb.Label(col_dir, text="Regras de Compliance:", bootstyle="primary").grid(row=r, column=0, columnspan=2, sticky="w", pady=(0,5)); r+=1
     tb.Checkbutton(col_dir, text="Exige Nota Fiscal (NF)?", variable=exige_nf_var, bootstyle="round-toggle").grid(row=r, column=0, columnspan=2, sticky="w", pady=5); r+=1
     tb.Checkbutton(col_dir, text="Exige Certificado?", variable=exige_cert_var, bootstyle="round-toggle").grid(row=r, column=0, columnspan=2, sticky="w", pady=5); r+=1
+    tb.Checkbutton(col_dir, text="Entra na DMR (SINIR)?", variable=entra_dmr_var, bootstyle="round-toggle").grid(row=r, column=0, columnspan=2, sticky="w", pady=5); r+=1
+    tb.Label(col_dir, text="Desligue para itens sem código IBAMA que não são declarados.\n(Lançamentos de 'Logística reversa' já ficam fora automaticamente.)",
+             bootstyle="secondary", font=("Segoe UI", 8)).grid(row=r, column=0, columnspan=2, sticky="w"); r+=1
 
     frame_btns = tb.Frame(edit_window)
     frame_btns.pack(fill="x", padx=15, pady=10)
@@ -3194,19 +3225,20 @@ def abrir_janela_gerenciar_residuo(nome_antigo=None):
         if is_edit_mode:
             if db.update_residuo(nome_antigo, nome_novo, nome_nf_novo, codigo_item_novo, codigo_ibama_novo, modo_novo, val_kg, val_fec, val_pu, calcula_rateio_novo, p_estado, p_dest, p_tipo, p_parc, grupo_novo, v_exige_nf, v_exige_cert):
                 success = True; set_status(f"Resíduo '{nome_novo}' atualizado.")
-            else: ModernMessageBox.showerror("Erro", "Não foi possível atualizar.", parent=edit_window)
+            else: ModernMessageBox.showerror("Erro", detalhe_erro_db("Não foi possível atualizar."), parent=edit_window)
         else:
             if db.add_residuo(nome_novo, nome_nf_novo, codigo_item_novo, codigo_ibama_novo, modo_novo, val_kg, val_fec, val_pu, calcula_rateio_novo, p_estado, p_dest, p_tipo, p_parc, grupo_novo, v_exige_nf, v_exige_cert):
                 success = True; set_status(f"Resíduo '{nome_novo}' adicionado.")
-            else: ModernMessageBox.showerror("Erro", "Não foi possível adicionar.", parent=edit_window)
+            else: ModernMessageBox.showerror("Erro", detalhe_erro_db("Não foi possível adicionar."), parent=edit_window)
 
         if success:
+            db.set_entra_dmr(nome_novo, entra_dmr_var.get())
             if is_edit_mode:
                 nf_bool = bool(exige_nf_var.get()); cert_bool = bool(exige_cert_var.get())
                 msg = f"As regras de compliance para '{nome_novo}' foram salvas.\nDeseja atualizar TODOS os registros passados com essas novas regras?"
                 if ModernMessageBox.askyesno("Atualizar Histórico?", msg, parent=edit_window):
                     if db.update_compliance_historico(nome_novo, nf_bool, cert_bool): ModernMessageBox.showinfo("Sucesso", "Registros atualizados!", parent=edit_window)
-                    else: ModernMessageBox.showerror("Erro", "Falha ao atualizar.", parent=edit_window)
+                    else: ModernMessageBox.showerror("Erro", detalhe_erro_db("Falha ao atualizar."), parent=edit_window)
             edit_window.destroy(); preencher_banco_tabela(); sincronizar_residuos_ui(); atualizar_views()
             
     btn_cancelar = tb.Button(frame_btns, text="Cancelar", command=edit_window.destroy, bootstyle=SECONDARY)
@@ -3295,30 +3327,50 @@ def config_tags_por_tema():
             tv.tag_configure("oddrow", background=style.colors.bg) 
             tv.tag_configure("evenrow", background="#f2f2f2") # Um cinza bem leve
 
-def ordenar_coluna(col, reverse):
-    """Ordena a tabela principal pela coluna clicada."""
-    data = [(tabela.set(k, col), k) for k in tabela.get_children("")]
-    def to_key(v):
-        v_str = str(v)
-        if col in ("Peso","Valor por kg","Valor fechado","Transporte","Valor Total"):
-            s = v_str.replace("R$","").replace("kg","").replace(" ","").replace(".","").replace(",",".")
-            try: return float(s)
-            except ValueError: return 0.0
-        elif col == "Data":
-            try: return datetime.strptime(v_str, "%d/%b/%y")
-            except ValueError: return datetime.min
-        return v_str.lower()
+ORDEM_TABELA = {"col": None, "reverse": False}
+
+def _chave_ordenacao(col, iid):
+    """Valor usado para ordenar uma linha: lê os dados reais (data, kg, R$), não o texto formatado."""
+    try: row = df_registros_global.loc[int(iid)]
+    except Exception: row = None
+
+    if col == "Data":
+        v = pd.to_datetime(row.get("Data"), errors="coerce") if row is not None else pd.NaT
+        return v if pd.notna(v) else pd.Timestamp.min
+    if col == "Peso":
+        if row is None: return 0.0
+        modo = clean_str(row.get("Modo", "kg")).lower()
+        return to_float_safe(row.get("PesoEmKg", 0.0)) if modo == "unidade" else to_float_safe(row.get("Peso", 0.0))
+    colunas_valor = {"Valor por kg/unidade": "ValorPorKg", "Valor por kg": "ValorPorKg", "Valor fechado": "ValorFechado", "Transporte": "Transporte"}
+    if col in colunas_valor:
+        return to_float_safe(row.get(colunas_valor[col], 0.0)) if row is not None else 0.0
+    if col == "Valor Total":
+        # A coluna mostra o valor do resíduo (total sem o transporte)
+        return (to_float_safe(row.get("ValorTotal", 0.0)) - to_float_safe(row.get("Transporte", 0.0))) if row is not None else 0.0
+    return normalizar(str(tabela.set(iid, col)))
+
+def _aplicar_ordenacao():
+    """Reordena a tabela conforme ORDEM_TABELA e mostra ▲/▼ no título da coluna."""
+    col, reverse = ORDEM_TABELA["col"], ORDEM_TABELA["reverse"]
+    for c, titulo in TITULOS_TABELA.items():
+        seta = (" ▼" if reverse else " ▲") if c == col else ""
+        tabela.heading(c, text=titulo + seta)
+    if not col: return
     try:
-        data.sort(key=lambda x: to_key(x[0]), reverse=reverse)
+        itens = sorted(tabela.get_children(""), key=lambda k: _chave_ordenacao(col, k), reverse=reverse)
     except Exception as e:
-        print(f"Erro ao ordenar coluna {col}: {e}")
+        db._registrar_erro(f"Erro ao ordenar coluna {col}: {e}")
         return
-    for i, (_, k) in enumerate(data):
-        try:
-            tabela.move(k, "", i)
-        except tk.TclError:
-            continue
-    tabela.heading(col, command=lambda c=col: ordenar_coluna(c, not reverse))
+    for i, k in enumerate(itens):
+        tabela.move(k, "", i)
+
+def ordenar_coluna(col):
+    """Clique no título: ordena pela coluna; clicar de novo inverte a ordem."""
+    if ORDEM_TABELA["col"] == col:
+        ORDEM_TABELA["reverse"] = not ORDEM_TABELA["reverse"]
+    else:
+        ORDEM_TABELA["col"], ORDEM_TABELA["reverse"] = col, False
+    _aplicar_ordenacao()
 
 def atualizar_menus_dinamicos(base):
     """Atualiza as Comboboxes de filtro (Parceiro, Resíduo, Destinação)."""
@@ -3333,10 +3385,10 @@ def atualizar_menus_dinamicos(base):
     parc_menu.configure(values=lista_parc)
     if f_parc.get() not in lista_parc: f_parc.set("Todos")
 
-    # Atualiza Combobox Resíduo
+    # Atualiza Combobox Resíduo (digitável: o texto não é apagado enquanto o usuário escreve)
     lista_res = ["Todos"] + res_set
     res_menu.configure(values=lista_res)
-    if f_res.get() not in lista_res: f_res.set("Todos")
+    configurar_autocomplete(res_menu, lista_res)
 
     # Atualiza Combobox Destinação
     lista_dest = ["Todas"] + dest_set
@@ -3374,8 +3426,14 @@ def aplicar_filtros(df):
     if f_parc.get() != "Todos" and 'Parceiro' in d.columns:
         d = d[d["Parceiro"] == f_parc.get()]
 
-    if f_res.get() != "Todos" and 'Residuo' in d.columns:
-        d = d[d["Residuo"] == f_res.get()]
+    res_sel = clean_str(f_res.get())
+    if res_sel and res_sel != "Todos" and 'Residuo' in d.columns:
+        if res_sel in banco_residuos or (d["Residuo"] == res_sel).any():
+            d = d[d["Residuo"] == res_sel]
+        else:
+            # Texto parcial digitado: mostra os resíduos que contêm o texto (ignora acentos/maiúsculas)
+            res_norm = normalizar(res_sel)
+            d = d[d["Residuo"].astype(str).map(normalizar).str.contains(res_norm, regex=False)]
 
     if f_estado.get() != "Todas" and 'Estado' in d.columns:
         d = d[d["Estado"] == f_estado.get()]
@@ -3394,6 +3452,9 @@ def aplicar_filtros(df):
             conditions.append(d["Parceiro"].str.lower().str.contains(q, na=False))
         if 'PedidoCompra' in d.columns: 
             conditions.append(d["PedidoCompra"].astype(str).str.contains(q, na=False))
+        q_norm = normalizar(q)
+        if 'Residuo' in d.columns and q_norm: 
+            conditions.append(d["Residuo"].astype(str).map(normalizar).str.contains(q_norm, regex=False))
         
         if conditions:
             final_condition = conditions[0]
@@ -3412,6 +3473,7 @@ def aplicar_filtros(df):
 def preencher_tabela(df):
     """Preenche a tabela priorizando as cores de Estado (Sólido/Líquido)."""
     for r in tabela.get_children(): tabela.delete(r)
+    atualizar_totais_tabela(df)
     
     if df.empty: return
     
@@ -3513,12 +3575,34 @@ def preencher_tabela(df):
         
         tabela.insert("", "end", iid=str(i), values=values_display, tags=tuple(tags))
 
+    if ORDEM_TABELA["col"]: _aplicar_ordenacao()
+
+def atualizar_totais_tabela(df):
+    """Mostra no título do quadro 'Registros' a quantidade, o peso e os valores dos registros filtrados."""
+    n = len(df)
+    if n == 0:
+        tbl_card.configure(text="Registros  —  nenhum registro encontrado")
+        return
+    peso_total = Decimal("0"); venda = Decimal("0"); custo = Decimal("0")
+    for _, row in df.iterrows():
+        modo = clean_str(row.get("Modo", "kg")).lower()
+        peso_total += _dec(row.get("PesoEmKg", 0.0) if modo == "unidade" else row.get("Peso", 0.0))
+        tipo = clean_str(row.get("Tipo", "")).lower()
+        valor = _dec(row.get("ValorTotal", 0.0))
+        if tipo == "venda": venda += valor
+        elif tipo == "custo": custo += valor
+    partes = [f"{n} {'registro' if n == 1 else 'registros'}", fmt_kg(peso_total)]
+    if venda: partes.append(f"Venda: {fmt_moeda(venda)}")
+    if custo: partes.append(f"Custo: {fmt_moeda(custo)}")
+    tbl_card.configure(text="Registros  —  " + "  ·  ".join(partes))
+
 # --- Funções Sincronização/Preenchimento Bancos Apoio ---
 def preencher_banco_tabela():
     global df_banco, banco_dict 
     df_banco = db.get_banco_residuos() 
     banco_dict.clear()
     for r in bn_tbl.get_children(): bn_tbl.delete(r)
+    q = normalizar(bn_busca.get())
         
     row_num = 0
     for i, row in df_banco.iterrows():
@@ -3540,21 +3624,37 @@ def preencher_banco_tabela():
             'parceiro_padrao': clean_str(row.get('ParceiroPadrao', '')),
             'grupo': clean_str(row.get('Grupo', '')),
             'exige_nf': bool(row.get('ExigeNF', 1)),
-            'exige_cert': bool(row.get('ExigeCertificado', 1))
+            'exige_cert': bool(row.get('ExigeCertificado', 1)),
+            'entra_dmr': str(row.get('EntraDMR', 1)) not in ('0', '0.0', 'False')
         }
         banco_dict[residuo_nome] = residuo_data 
+        codigo_ibama = calculos.formatar_codigo_ibama(residuo_data['codigo_ibama'])
+        if q and not any(q in normalizar(t) for t in (residuo_nome, residuo_data['nome_nf'], residuo_data['codigo_ibama'])): continue
+        entra_dmr = residuo_data['entra_dmr']
+        if bn_so_sem_ibama.get() and (codigo_ibama or not entra_dmr): continue
+
+        # Valor padrão numa coluna só, conforme o modo (vazio quando não há valor)
+        modo = residuo_data['modo']
+        if modo == 'fechado':
+            valor_txt = f"{fmt_moeda(residuo_data['fechado'])} fechado" if residuo_data['fechado'] > 0 else ""
+        elif modo == 'unidade':
+            valor_txt = f"{fmt_moeda(residuo_data['kg'])}/un" if residuo_data['kg'] > 0 else ""
+            if residuo_data['peso_unitario'] > 0: valor_txt = (valor_txt + f"  ({fmt_kg(residuo_data['peso_unitario'])}/un)").strip()
+        else:
+            valor_txt = f"{fmt_moeda(residuo_data['kg'])}/kg" if residuo_data['kg'] > 0 else ""
 
         values_display = (
             residuo_nome,
+            codigo_ibama or ("não entra na DMR" if not entra_dmr else "falta"),
             residuo_data['nome_nf'],
             residuo_data['codigo_item'],
-            residuo_data['modo'],
-            fmt_moeda(residuo_data['kg']),
-            fmt_moeda(residuo_data['fechado']),
-            fmt_kg(residuo_data['peso_unitario']), 
+            residuo_data['destinacao_padrao'],
+            valor_txt,
         )
-        tag = "evenrow" if row_num % 2 == 0 else "oddrow"
-        bn_tbl.insert("", "end", iid=str(i), values=values_display, tags=(tag,))
+        tags = ["evenrow" if row_num % 2 == 0 else "oddrow"]
+        if not entra_dmr: tags.append("fora_dmr")
+        elif not codigo_ibama: tags.append("sem_ibama")
+        bn_tbl.insert("", "end", iid=str(i), values=values_display, tags=tuple(tags))
         row_num += 1
         
 def sincronizar_residuos_ui():
@@ -3589,6 +3689,7 @@ def sincronizar_residuos_ui():
     
     lista_res = ["Todos"] + banco_residuos
     res_menu.configure(values=lista_res)
+    configurar_autocomplete(res_menu, lista_res)
     
     if 'ger_res_cb' in globals(): 
         ger_res_cb.configure(values=banco_residuos_rateio)
@@ -3837,12 +3938,12 @@ def abrir_janela_gerenciar_parceiro(nome_antigo=None):
             if db.update_parceiro(nome_antigo, nome_novo, tipo_novo, cnpj_novo): 
                 success = True; set_status("Atualizado.")
             else: 
-                ModernMessageBox.showerror("Erro", "Falha ao atualizar.", parent=edit_window)
+                ModernMessageBox.showerror("Erro", detalhe_erro_db("Falha ao atualizar."), parent=edit_window)
         else:
             if db.add_parceiro(nome_novo, tipo_novo, cnpj_novo): 
                 success = True; set_status("Adicionado.")
             else: 
-                ModernMessageBox.showerror("Erro", "Falha ao adicionar.", parent=edit_window)
+                ModernMessageBox.showerror("Erro", detalhe_erro_db("Falha ao adicionar."), parent=edit_window)
 
         if success: 
             edit_window.destroy()
@@ -3953,13 +4054,13 @@ def abrir_janela_gerenciar_analise(nome_antigo=None):
                 success = True
                 set_status(f"Análise '{nome_novo}' atualizada.")
             else:
-                ModernMessageBox.showerror("Erro ao Salvar", "Não foi possível atualizar a análise.", parent=edit_window)
+                ModernMessageBox.showerror("Erro ao Salvar", detalhe_erro_db("Não foi possível atualizar a análise."), parent=edit_window)
         else:
             if db.add_analise(nome_novo, float(valor_novo)):
                 success = True
                 set_status(f"Análise '{nome_novo}' adicionada.")
             else:
-                 ModernMessageBox.showerror("Erro ao Salvar", "Não foi possível adicionar a análise.", parent=edit_window)
+                 ModernMessageBox.showerror("Erro ao Salvar", detalhe_erro_db("Não foi possível adicionar a análise."), parent=edit_window)
 
         if success:
             edit_window.destroy()
@@ -4038,7 +4139,7 @@ def banco_edit_grupo_lote():
             sincronizar_residuos_ui()
             ModernMessageBox.showinfo("Sucesso", f"Grupo '{novo_grupo}' aplicado em {sucessos} resíduo(s)!")
         else:
-            ModernMessageBox.showerror("Erro", "Não foi possível atualizar os resíduos.")
+            ModernMessageBox.showerror("Erro", "Não foi possível atualizar os resíduos.\n\n" + detalhe_erro_db(""))
 
     frame_btns = tb.Frame(janela_lote)
     frame_btns.pack(pady=15)
@@ -5897,7 +5998,9 @@ def submit_registro_event(_=None):
         foi_edicao = (EDITING_ID is not None)
         
         if foi_edicao: 
-            db.update_registro(EDITING_ID, data_full_para_db)
+            if not db.update_registro(EDITING_ID, data_full_para_db):
+                ModernMessageBox.showerror("Erro ao Salvar", "O registro NÃO foi atualizado.\n\n" + detalhe_erro_db("Erro no banco de dados."))
+                return
             
             # GAMBIARRA SEGURA: Se o update_registro original não aceita NF (tem 16 campos e não 17),
             # fazemos um update extra só para garantir a NF.
@@ -5908,6 +6011,9 @@ def submit_registro_event(_=None):
         else: 
             # Insere novo
             new_id = db.add_registro(data_full_para_db)
+            if not new_id or new_id == -1:
+                ModernMessageBox.showerror("Erro ao Salvar", "O registro NÃO foi salvo.\n\n" + detalhe_erro_db("Erro no banco de dados."))
+                return
             
             # GAMBIARRA SEGURA: Atualiza a NF logo em seguida para o ID criado
             if new_id and new_id != -1 and hasattr(db, 'update_nf'):
@@ -6187,17 +6293,19 @@ def alterar_exigencias_lote():
                     nf_status = "N/A"
 
                 # Atualiza no banco de dados
-                db.update_certificado(rid, cert_status)
-                if hasattr(db, 'update_nf'): 
-                    db.update_nf(rid, nf_status)
-                    
-                sucessos += 1
+                ok_cert = db.update_certificado(rid, cert_status)
+                ok_nf = db.update_nf(rid, nf_status) if hasattr(db, 'update_nf') else True
+                if ok_cert and ok_nf: sucessos += 1
             except Exception as e:
-                print(f"Erro ao atualizar exigência {rid}: {e}")
+                db._registrar_erro(f"Erro ao atualizar exigência {rid}: {e}")
 
         janela_lote.destroy()
         atualizar_views()
-        ModernMessageBox.showinfo("Sucesso", f"Regras aplicadas em {sucessos} registro(s)!")
+        falhas = len(selecionados) - sucessos
+        if falhas:
+            ModernMessageBox.showwarning("Atenção", f"Regras aplicadas em {sucessos} registro(s).\n{falhas} registro(s) NÃO foram atualizados.\n\n" + detalhe_erro_db(""))
+        else:
+            ModernMessageBox.showinfo("Sucesso", f"Regras aplicadas em {sucessos} registro(s)!")
 
     frame_btns = tb.Frame(janela_lote)
     frame_btns.pack(pady=15)
@@ -6715,7 +6823,7 @@ def importar_pdfs_tickets(file_paths, parceiro, data_db_fmt, tipo, destinacao):
     if pdfs_processados > 0:
         atualizar_views()
         msg = f"Processado. {sucesso_total} itens importados."
-        if erros_total > 0: msg += f"\nAlguns erros ocorreram (ver console)."
+        if erros_total > 0: msg += f"\nAlguns itens NÃO foram importados.\n" + detalhe_erro_db("Detalhes em 'erros_sistema.log'.")
         ModernMessageBox.showinfo("Importação", msg)
     else:
         ModernMessageBox.showwarning("Erro", "Nenhum arquivo processado corretamente.")
@@ -7111,47 +7219,151 @@ def atualizar_dashboard():
     set_status(f"Análise atualizada: {dt_inicio:%d/%m/%y} - {dt_fim:%d/%m/%y}.")
     
 def exportar_para_sinir():
-    """Gera a planilha formatada para a declaração do SINIR/Órgão Estadual."""
-    try:
-        dt_inicio = ana_data_inicio.get_date()
-        dt_fim = ana_data_fim.get_date()
-    except Exception as e:
-        ModernMessageBox.showerror("Erro Data", f"Datas inválidas: {e}")
-        return
+    """Assistente da DMR trimestral (SINIR): escolhe o trimestre, aponta pendências e gera a planilha."""
+    win = tb.Toplevel(app)
+    win.title("Assistente da DMR — SINIR")
+    win.geometry("1000x600")
+    win.transient(app)  # Sem grab_set: dá para corrigir cadastros com a janela aberta e clicar em "Verificar" de novo
 
-    # Usamos o DataFrame global não filtrado (os filtros visuais não importam para o SINIR, apenas a data)
-    base = obter_df_registros()
-    
-    # Chama a função que criamos no calculos.py
-    df_sinir = calculos.gerar_relatorio_sinir(base, dt_inicio, dt_fim)
-    
-    if df_sinir.empty:
-        ModernMessageBox.showinfo("SINIR", f"Nenhum dado encontrado no período de {dt_inicio:%d/%m/%Y} a {dt_fim:%d/%m/%Y}.")
-        return
+    ano_padrao, tri_padrao = calculos.ultimo_trimestre_fechado()
+    nomes_tri = ["1º trimestre (jan–mar)", "2º trimestre (abr–jun)", "3º trimestre (jul–set)", "4º trimestre (out–dez)"]
+    ano_var = tk.StringVar(value=str(ano_padrao))
+    tri_var = tk.StringVar(value=nomes_tri[tri_padrao - 1])
+    resumo_var = tk.StringVar(value="")
+    estado = {"dados": None, "periodo": None}
 
-    default_filename = f"DMR_SINIR_{dt_inicio:%m-%Y}_a_{dt_fim:%m-%Y}.xlsx"
-    path = filedialog.asksaveasfilename(
-        defaultextension=".xlsx", 
-        filetypes=[("Arquivo Excel", "*.xlsx")], 
-        initialfile=default_filename, 
-        title="Salvar Relatório SINIR"
-    )
-    if not path: return
+    topo = tb.Frame(win, padding=(15, 15, 15, 5)); topo.pack(fill="x")
+    tb.Label(topo, text="Ano:").pack(side="left")
+    tb.Spinbox(topo, from_=2020, to=2100, textvariable=ano_var, width=6).pack(side="left", padx=(5, 15))
+    tb.Label(topo, text="Trimestre:").pack(side="left")
+    tb.Combobox(topo, textvariable=tri_var, values=nomes_tri, state="readonly", width=24).pack(side="left", padx=(5, 15))
+    btn_verificar = tb.Button(topo, text="Verificar", bootstyle=PRIMARY)
+    btn_verificar.pack(side="left")
 
-    try:
-        with pd.ExcelWriter(path, engine='openpyxl') as writer:
-            df_sinir.to_excel(writer, sheet_name="DMR_SINIR", index=False)
-            
-            # Estética do Excel
-            ws = writer.sheets['DMR_SINIR']
-            for col in ws.columns:
-                col_name = col[0].value
-                length = max((len(str(cell.value)) for cell in col), default=15)
-                ws.column_dimensions[col[0].column_letter].width = min(length + 2, 50)
-                
-        ModernMessageBox.showinfo("Sucesso", f"Relatório SINIR exportado com sucesso!\nCopie os dados da planilha para o portal do órgão ambiental.")
-    except Exception as e:
-        ModernMessageBox.showerror("Erro", f"Falha ao salvar arquivo: {e}")
+    tb.Label(win, textvariable=resumo_var, font=("Segoe UI", 10, "bold"), padding=(15, 5)).pack(fill="x")
+
+    abas = tb.Notebook(win, bootstyle=PRIMARY)
+    abas.pack(fill="both", expand=True, padx=15, pady=5)
+
+    # Aba 1: totais por código IBAMA, para conferir com o SINIR (duplo clique marca como conferido)
+    aba_cod = tb.Frame(abas, padding=6); abas.add(aba_cod, text="Conferência por código IBAMA")
+    aba_cod.rowconfigure(1, weight=1); aba_cod.columnconfigure(0, weight=1)
+    tb.Label(aba_cod, text="Compare cada código com o SINIR. Dê dois cliques na linha para marcar como conferida.",
+             bootstyle=SECONDARY).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 5))
+    cols_cod = ("✔", "Código IBAMA", "Quantidade (t)", "Resíduos incluídos", "Destinadores")
+    tv_cod = ttk.Treeview(aba_cod, columns=cols_cod, show="headings")
+    for c, w, a in zip(cols_cod, (35, 125, 110, 410, 260), ("center", "center", "e", "w", "w")):
+        tv_cod.heading(c, text=c); tv_cod.column(c, width=w, anchor=a, stretch=(c in ("Resíduos incluídos", "Destinadores")))
+    tv_cod.grid(row=1, column=0, sticky="nsew")
+    sb_cod = ttk.Scrollbar(aba_cod, orient="vertical", command=tv_cod.yview); tv_cod.configure(yscroll=sb_cod.set); sb_cod.grid(row=1, column=1, sticky="ns")
+    tv_cod.tag_configure("conferido", foreground="#2e7d32")
+    tv_cod.tag_configure("sem_codigo", foreground="#cc0000")
+
+    def marcar_conferido(_evt=None):
+        iid = tv_cod.focus()
+        if not iid: return
+        marcado = tv_cod.set(iid, "✔") == "✔"
+        tv_cod.set(iid, "✔", "" if marcado else "✔")
+        tags = [t for t in tv_cod.item(iid, "tags") if t != "conferido"]
+        if not marcado: tags.append("conferido")
+        tv_cod.item(iid, tags=tags)
+    tv_cod.bind("<Double-1>", marcar_conferido)
+
+    # Aba 2: pendências
+    card = tb.Frame(abas, padding=6); abas.add(card, text="Pendências")
+    card.rowconfigure(0, weight=1); card.columnconfigure(0, weight=1)
+    cols = ("Problema", "Item", "Lançamentos", "Peso (kg)", "Como resolver")
+    tv = ttk.Treeview(card, columns=cols, show="headings")
+    for c, w, a in zip(cols, (270, 180, 95, 90, 360), ("w", "w", "center", "e", "w")):
+        tv.heading(c, text=c); tv.column(c, width=w, anchor=a, stretch=(c == "Como resolver"))
+    tv.grid(row=0, column=0, sticky="nsew")
+    sb = ttk.Scrollbar(card, orient="vertical", command=tv.yview); tv.configure(yscroll=sb.set); sb.grid(row=0, column=1, sticky="ns")
+
+    rodape = tb.Frame(win, padding=15); rodape.pack(fill="x")
+    tb.Label(rodape, text="Ficam fora da DMR: análises, fretes, locações, logística reversa e resíduos marcados como 'não entra'.", bootstyle=SECONDARY).pack(side="left")
+    tb.Button(rodape, text="Fechar", bootstyle=SECONDARY, command=win.destroy).pack(side="right")
+    btn_gerar = tb.Button(rodape, text="Gerar planilha DMR", bootstyle=SUCCESS, state="disabled")
+    btn_gerar.pack(side="right", padx=10)
+
+    def verificar():
+        try:
+            ano = int(ano_var.get()); tri = nomes_tri.index(tri_var.get()) + 1
+        except ValueError:
+            ModernMessageBox.showerror("Ano inválido", "Informe um ano válido.", parent=win); return
+        dt_ini, dt_fim = calculos.periodo_trimestre(ano, tri)
+        base = db.get_all_registros_df(data_inicio=dt_ini.isoformat())  # Lê do banco: reflete correções recentes
+        dados = calculos.preparar_dmr(base, dt_ini, dt_fim)
+        estado["dados"], estado["periodo"] = dados, (ano, tri, dt_ini, dt_fim)
+
+        for r in tv.get_children(): tv.delete(r)
+        pend = dados["pendencias"]
+        for _, row in pend.iterrows():
+            tv.insert("", "end", values=(row["Problema"], row["Item"], row["Lançamentos"], fmt_kg(row["Peso (kg)"]), row["Como resolver"]))
+        abas.tab(card, text=f"Pendências ({len(pend)})" if not pend.empty else "Pendências ✔")
+
+        conferidos = {tv_cod.set(i, "Código IBAMA") for i in tv_cod.get_children() if tv_cod.set(i, "✔") == "✔"}
+        for r in tv_cod.get_children(): tv_cod.delete(r)
+        for _, row in dados["por_codigo"].iterrows():
+            cod = row["Código IBAMA"]; ok = cod in conferidos
+            t_fmt = f"{row['Quantidade (t)']:,.4f} t".replace(",", "X").replace(".", ",").replace("X", ".")
+            tags = ["sem_codigo"] if cod == "SEM CÓDIGO" else []
+            if ok: tags.append("conferido")
+            tv_cod.insert("", "end", values=("✔" if ok else "", cod, t_fmt, row["Resíduos incluídos"], row["Destinadores"]), tags=tags)
+
+        resumo = dados["resumo"]
+        if resumo.empty:
+            resumo_var.set(f"{dt_ini:%d/%m/%Y} a {dt_fim:%d/%m/%Y}: nenhum resíduo lançado no período.")
+            btn_gerar.configure(state="disabled"); return
+        total_t = resumo["Quantidade (t)"].sum()
+        txt_pend = "nenhuma pendência ✔" if pend.empty else f"{len(pend)} pendência(s)"
+        resumo_var.set(f"{dt_ini:%d/%m/%Y} a {dt_fim:%d/%m/%Y}  ·  {resumo['Resíduo'].nunique()} resíduos  ·  "
+                       f"{total_t:,.3f} t".replace(",", "X").replace(".", ",").replace("X", ".") + f"  ·  {txt_pend}")
+        btn_gerar.configure(state="normal")
+
+    def gerar():
+        dados = estado["dados"]
+        ano, tri, dt_ini, dt_fim = estado["periodo"]
+        if not dados["pendencias"].empty and not ModernMessageBox.askyesno(
+                "Pendências", f"Ainda há {len(dados['pendencias'])} pendência(s).\nGerar a planilha mesmo assim?\n\n"
+                "(Elas também serão listadas na aba 'Pendências' da planilha.)", parent=win):
+            return
+        path = filedialog.asksaveasfilename(parent=win, defaultextension=".xlsx", filetypes=[("Arquivo Excel", "*.xlsx")],
+                                            initialfile=f"DMR_{tri}T_{ano}.xlsx", title="Salvar planilha da DMR")
+        if not path: return
+        try:
+            from openpyxl.styles import Font, PatternFill
+            abas_xlsx = [("Conferência por código", dados["por_codigo"]), ("Por código e destinador", dados["resumo"]),
+                         ("Por mês", dados["por_mes"]), ("Lançamentos", dados["lancamentos"]),
+                         ("Pendências", dados["pendencias"]), ("Fora da DMR", dados["ignorados"])]
+            with pd.ExcelWriter(path, engine='openpyxl') as writer:
+                for nome, df_aba in abas_xlsx:
+                    df_aba.to_excel(writer, sheet_name=nome, index=False)
+                    ws = writer.sheets[nome]
+                    ws.freeze_panes = "A2"
+                    for cel in ws[1]:
+                        cel.font = Font(bold=True, color="FFFFFF"); cel.fill = PatternFill("solid", fgColor="1F6E8C")
+                    for col in ws.columns:
+                        largura = max((len(str(c.value)) for c in col if c.value is not None), default=10)
+                        ws.column_dimensions[col[0].column_letter].width = min(largura + 2, 60)
+                    # Destaca em amarelo células obrigatórias vazias (código IBAMA / CNPJ)
+                    cabec = [c.value for c in ws[1]]
+                    for nome_col in ("Código IBAMA", "CNPJ Destinador"):
+                        if nome_col in cabec:
+                            idx = cabec.index(nome_col) + 1
+                            for linha in ws.iter_rows(min_row=2, min_col=idx, max_col=idx):
+                                if not linha[0].value or linha[0].value == "SEM CÓDIGO":
+                                    linha[0].fill = PatternFill("solid", fgColor="FFF2CC")
+            ModernMessageBox.showinfo("DMR", f"Planilha da DMR do {tri}º trimestre de {ano} gerada!\n\n"
+                                      "Use a aba 'Conferência por código' para conferir com o SINIR\n(a coluna 'Conferido' é para você marcar com X).", parent=win)
+        except PermissionError:
+            ModernMessageBox.showerror("Erro", "Não foi possível salvar: o arquivo está aberto no Excel?\nFeche-o e tente de novo.", parent=win)
+        except Exception as e:
+            db._registrar_erro(f"Erro ao gerar planilha DMR: {e}")
+            ModernMessageBox.showerror("Erro", f"Falha ao salvar a planilha: {e}", parent=win)
+
+    btn_verificar.configure(command=verificar)
+    btn_gerar.configure(command=gerar)
+    verificar()
 
 # Liga o botão à função
 btn_sinir.configure(command=exportar_para_sinir)
@@ -7600,31 +7812,12 @@ atualizar_tabela_metragem()
 def realizar_backup_e_fechar():
     """Cria uma cópia do banco ao fechar e encerra o programa."""
     try:
-        # 1. Cria a pasta de backups se não existir
-        pasta_backup = "Backups"
-        if not os.path.exists(pasta_backup):
-            os.makedirs(pasta_backup)
-            
-        # 2. Define nomes dos arquivos
-        # Nome do banco original (confirme se é este nome mesmo no seu projeto)
-        arquivo_origem = "residuos_db.sqlite" 
-        
-        # Nome do destino com Data e Hora (ex: backup_2025-01-15_18-30.sqlite)
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        arquivo_destino = os.path.join(pasta_backup, f"backup_{timestamp}.sqlite")
-        
-        # 3. Faz a cópia
-        if os.path.exists(arquivo_origem):
-            shutil.copy2(arquivo_origem, arquivo_destino)
-            print(f"Backup de segurança criado em: {arquivo_destino}")
-            
-            # (Opcional) Limpeza: Mantém apenas os últimos 50 backups para não encher o disco
-            lista_backups = sorted([os.path.join(pasta_backup, f) for f in os.listdir(pasta_backup)], key=os.path.getmtime)
-            while len(lista_backups) > 50:
-                os.remove(lista_backups.pop(0))
-                
+        # 1 cópia por dia na pasta "Backups", guardando os últimos 60 dias (ver backup.py)
+        from backup import fazer_backup_diario
+        fazer_backup_diario(db.DB_FILE)
     except Exception as e:
         # Se der erro no backup, avisa mas deixa fechar o programa
+        db._registrar_erro(f"Erro no backup automático: {e}")
         ModernMessageBox.showwarning("Aviso de Backup", f"Não foi possível criar o backup automático:\n{e}")
 
     # 4. Encerra o programa
