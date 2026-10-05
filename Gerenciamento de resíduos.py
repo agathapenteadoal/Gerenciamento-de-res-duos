@@ -2522,6 +2522,9 @@ btn_bn_add.pack(side="left", padx=0)
 
 # --- Busca por nome do resíduo ---
 bn_busca = tk.StringVar()
+bn_so_sem_ibama = tk.BooleanVar(value=False)
+tb.Checkbutton(bn_actions, text="Só sem código IBAMA", variable=bn_so_sem_ibama, bootstyle="round-toggle",
+               command=lambda: preencher_banco_tabela()).pack(side="right", padx=(10, 0))
 tb.Entry(bn_actions, textvariable=bn_busca, width=30).pack(side="right", padx=(0, 6))
 tb.Label(bn_actions, text="Buscar resíduo:").pack(side="right", padx=(0, 6))
 bn_busca.trace_add("write", lambda *_: preencher_banco_tabela())
@@ -2529,7 +2532,7 @@ bn_busca.trace_add("write", lambda *_: preencher_banco_tabela())
 bn_card = tb.Labelframe(aba_banco, text="Resíduos cadastrados", padding=6, bootstyle=INFO)
 bn_card.pack(fill="both", expand=True, pady=(10,0)); bn_card.rowconfigure(0, weight=1); bn_card.columnconfigure(0, weight=1)
 
-bn_cols = ("Resíduo (Interno)", "Nome p/ NF", "Código Item", "Modo Padrão", "Valor/kg Padrão", "Valor Fechado Padrão", "Peso/Unidade Padrão")
+bn_cols = ("Resíduo", "Código IBAMA", "Nome item (NF)", "Código item", "Destinação padrão", "Valor padrão")
 
 # --- MUDOU PARA EXTENDED ---
 bn_tbl = ttk.Treeview(bn_card, columns=bn_cols, show="headings", selectmode="extended")
@@ -2538,13 +2541,12 @@ bn_tbl.grid(row=0, column=0, sticky="nsew")
 bn_sy = ttk.Scrollbar(bn_card, orient="vertical", command=bn_tbl.yview); bn_tbl.configure(yscroll=bn_sy.set); bn_sy.grid(row=0, column=1, sticky="ns")
 
 # --- Configuração das Novas Colunas (Centralizadas) ---
-bn_tbl.heading("Resíduo (Interno)", text="Resíduo"); bn_tbl.column("Resíduo (Interno)", width=180, anchor="center", stretch=True)
-bn_tbl.heading("Nome p/ NF", text="Nome item"); bn_tbl.column("Nome p/ NF", width=220, anchor="center", stretch=True)
-bn_tbl.heading("Código Item", text="Código Item"); bn_tbl.column("Código Item", width=100, anchor="center", stretch=False)
-bn_tbl.heading("Modo Padrão", text="Modo"); bn_tbl.column("Modo Padrão", width=80, anchor="center", stretch=False)
-bn_tbl.heading("Valor/kg Padrão", text="Valor/kg (R$)"); bn_tbl.column("Valor/kg Padrão", width=120, anchor="center", stretch=False)
-bn_tbl.heading("Valor Fechado Padrão", text="Valor Fechado (R$)"); bn_tbl.column("Valor Fechado Padrão", width=140, anchor="center", stretch=False)
-bn_tbl.heading("Peso/Unidade Padrão", text="Peso/Unid. (kg)"); bn_tbl.column("Peso/Unidade Padrão", width=120, anchor="center", stretch=False)
+for c, w, a, estica in (("Resíduo", 220, "w", True), ("Código IBAMA", 135, "center", False),
+                        ("Nome item (NF)", 260, "w", True), ("Código item", 115, "center", False),
+                        ("Destinação padrão", 170, "center", False), ("Valor padrão", 190, "e", False)):
+    bn_tbl.heading(c, text=c); bn_tbl.column(c, width=w, anchor=a, stretch=estica)
+bn_tbl.tag_configure("sem_ibama", foreground="#cc0000")
+bn_tbl.bind("<Double-1>", lambda e: banco_edit_wrapper())  # Dois cliques abrem a edição
 
 # =========================
 # ABA  5 - Dados (UI Formatada)
@@ -3619,19 +3621,31 @@ def preencher_banco_tabela():
             'exige_cert': bool(row.get('ExigeCertificado', 1))
         }
         banco_dict[residuo_nome] = residuo_data 
-        if q and q not in normalizar(residuo_nome) and q not in normalizar(residuo_data['nome_nf']): continue
+        codigo_ibama = calculos.formatar_codigo_ibama(residuo_data['codigo_ibama'])
+        if q and not any(q in normalizar(t) for t in (residuo_nome, residuo_data['nome_nf'], residuo_data['codigo_ibama'])): continue
+        if bn_so_sem_ibama.get() and codigo_ibama: continue
+
+        # Valor padrão numa coluna só, conforme o modo (vazio quando não há valor)
+        modo = residuo_data['modo']
+        if modo == 'fechado':
+            valor_txt = f"{fmt_moeda(residuo_data['fechado'])} fechado" if residuo_data['fechado'] > 0 else ""
+        elif modo == 'unidade':
+            valor_txt = f"{fmt_moeda(residuo_data['kg'])}/un" if residuo_data['kg'] > 0 else ""
+            if residuo_data['peso_unitario'] > 0: valor_txt = (valor_txt + f"  ({fmt_kg(residuo_data['peso_unitario'])}/un)").strip()
+        else:
+            valor_txt = f"{fmt_moeda(residuo_data['kg'])}/kg" if residuo_data['kg'] > 0 else ""
 
         values_display = (
             residuo_nome,
+            codigo_ibama or "falta",
             residuo_data['nome_nf'],
             residuo_data['codigo_item'],
-            residuo_data['modo'],
-            fmt_moeda(residuo_data['kg']),
-            fmt_moeda(residuo_data['fechado']),
-            fmt_kg(residuo_data['peso_unitario']), 
+            residuo_data['destinacao_padrao'],
+            valor_txt,
         )
-        tag = "evenrow" if row_num % 2 == 0 else "oddrow"
-        bn_tbl.insert("", "end", iid=str(i), values=values_display, tags=(tag,))
+        tags = ["evenrow" if row_num % 2 == 0 else "oddrow"]
+        if not codigo_ibama: tags.append("sem_ibama")
+        bn_tbl.insert("", "end", iid=str(i), values=values_display, tags=tuple(tags))
         row_num += 1
         
 def sincronizar_residuos_ui():
