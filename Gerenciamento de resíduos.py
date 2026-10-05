@@ -7219,8 +7219,36 @@ def exportar_para_sinir():
 
     tb.Label(win, textvariable=resumo_var, font=("Segoe UI", 10, "bold"), padding=(15, 5)).pack(fill="x")
 
-    card = tb.Labelframe(win, text="Pendências — corrija antes de declarar", padding=6, bootstyle=WARNING)
-    card.pack(fill="both", expand=True, padx=15, pady=5); card.rowconfigure(0, weight=1); card.columnconfigure(0, weight=1)
+    abas = tb.Notebook(win, bootstyle=PRIMARY)
+    abas.pack(fill="both", expand=True, padx=15, pady=5)
+
+    # Aba 1: totais por código IBAMA, para conferir com o SINIR (duplo clique marca como conferido)
+    aba_cod = tb.Frame(abas, padding=6); abas.add(aba_cod, text="Conferência por código IBAMA")
+    aba_cod.rowconfigure(1, weight=1); aba_cod.columnconfigure(0, weight=1)
+    tb.Label(aba_cod, text="Compare cada código com o SINIR. Dê dois cliques na linha para marcar como conferida.",
+             bootstyle=SECONDARY).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 5))
+    cols_cod = ("✔", "Código IBAMA", "Quantidade (t)", "Resíduos incluídos", "Destinadores")
+    tv_cod = ttk.Treeview(aba_cod, columns=cols_cod, show="headings")
+    for c, w, a in zip(cols_cod, (35, 125, 110, 410, 260), ("center", "center", "e", "w", "w")):
+        tv_cod.heading(c, text=c); tv_cod.column(c, width=w, anchor=a, stretch=(c in ("Resíduos incluídos", "Destinadores")))
+    tv_cod.grid(row=1, column=0, sticky="nsew")
+    sb_cod = ttk.Scrollbar(aba_cod, orient="vertical", command=tv_cod.yview); tv_cod.configure(yscroll=sb_cod.set); sb_cod.grid(row=1, column=1, sticky="ns")
+    tv_cod.tag_configure("conferido", foreground="#2e7d32")
+    tv_cod.tag_configure("sem_codigo", foreground="#cc0000")
+
+    def marcar_conferido(_evt=None):
+        iid = tv_cod.focus()
+        if not iid: return
+        marcado = tv_cod.set(iid, "✔") == "✔"
+        tv_cod.set(iid, "✔", "" if marcado else "✔")
+        tags = [t for t in tv_cod.item(iid, "tags") if t != "conferido"]
+        if not marcado: tags.append("conferido")
+        tv_cod.item(iid, tags=tags)
+    tv_cod.bind("<Double-1>", marcar_conferido)
+
+    # Aba 2: pendências
+    card = tb.Frame(abas, padding=6); abas.add(card, text="Pendências")
+    card.rowconfigure(0, weight=1); card.columnconfigure(0, weight=1)
     cols = ("Problema", "Item", "Lançamentos", "Peso (kg)", "Como resolver")
     tv = ttk.Treeview(card, columns=cols, show="headings")
     for c, w, a in zip(cols, (270, 180, 95, 90, 360), ("w", "w", "center", "e", "w")):
@@ -7248,6 +7276,16 @@ def exportar_para_sinir():
         pend = dados["pendencias"]
         for _, row in pend.iterrows():
             tv.insert("", "end", values=(row["Problema"], row["Item"], row["Lançamentos"], fmt_kg(row["Peso (kg)"]), row["Como resolver"]))
+        abas.tab(card, text=f"Pendências ({len(pend)})" if not pend.empty else "Pendências ✔")
+
+        conferidos = {tv_cod.set(i, "Código IBAMA") for i in tv_cod.get_children() if tv_cod.set(i, "✔") == "✔"}
+        for r in tv_cod.get_children(): tv_cod.delete(r)
+        for _, row in dados["por_codigo"].iterrows():
+            cod = row["Código IBAMA"]; ok = cod in conferidos
+            t_fmt = f"{row['Quantidade (t)']:,.4f} t".replace(",", "X").replace(".", ",").replace("X", ".")
+            tags = ["sem_codigo"] if cod == "SEM CÓDIGO" else []
+            if ok: tags.append("conferido")
+            tv_cod.insert("", "end", values=("✔" if ok else "", cod, t_fmt, row["Resíduos incluídos"], row["Destinadores"]), tags=tags)
 
         resumo = dados["resumo"]
         if resumo.empty:
@@ -7257,7 +7295,6 @@ def exportar_para_sinir():
         txt_pend = "nenhuma pendência ✔" if pend.empty else f"{len(pend)} pendência(s)"
         resumo_var.set(f"{dt_ini:%d/%m/%Y} a {dt_fim:%d/%m/%Y}  ·  {resumo['Resíduo'].nunique()} resíduos  ·  "
                        f"{total_t:,.3f} t".replace(",", "X").replace(".", ",").replace("X", ".") + f"  ·  {txt_pend}")
-        card.configure(bootstyle=(SUCCESS if pend.empty else WARNING))
         btn_gerar.configure(state="normal")
 
     def gerar():
@@ -7272,11 +7309,11 @@ def exportar_para_sinir():
         if not path: return
         try:
             from openpyxl.styles import Font, PatternFill
-            abas = [("DMR - Resumo", dados["resumo"]), ("Por código IBAMA", dados["por_codigo"]),
-                    ("Por mês", dados["por_mes"]), ("Lançamentos", dados["lancamentos"]),
-                    ("Pendências", dados["pendencias"]), ("Fora da DMR", dados["ignorados"])]
+            abas_xlsx = [("Conferência por código", dados["por_codigo"]), ("Por código e destinador", dados["resumo"]),
+                         ("Por mês", dados["por_mes"]), ("Lançamentos", dados["lancamentos"]),
+                         ("Pendências", dados["pendencias"]), ("Fora da DMR", dados["ignorados"])]
             with pd.ExcelWriter(path, engine='openpyxl') as writer:
-                for nome, df_aba in abas:
+                for nome, df_aba in abas_xlsx:
                     df_aba.to_excel(writer, sheet_name=nome, index=False)
                     ws = writer.sheets[nome]
                     ws.freeze_panes = "A2"
@@ -7291,10 +7328,10 @@ def exportar_para_sinir():
                         if nome_col in cabec:
                             idx = cabec.index(nome_col) + 1
                             for linha in ws.iter_rows(min_row=2, min_col=idx, max_col=idx):
-                                if not linha[0].value:
+                                if not linha[0].value or linha[0].value == "SEM CÓDIGO":
                                     linha[0].fill = PatternFill("solid", fgColor="FFF2CC")
             ModernMessageBox.showinfo("DMR", f"Planilha da DMR do {tri}º trimestre de {ano} gerada!\n\n"
-                                      "Use a aba 'DMR - Resumo' para preencher/conferir a declaração no SINIR.", parent=win)
+                                      "Use a aba 'Conferência por código' para conferir com o SINIR\n(a coluna 'Conferido' é para você marcar com X).", parent=win)
         except PermissionError:
             ModernMessageBox.showerror("Erro", "Não foi possível salvar: o arquivo está aberto no Excel?\nFeche-o e tente de novo.", parent=win)
         except Exception as e:

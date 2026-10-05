@@ -516,7 +516,6 @@ def preparar_dmr(df_registros, dt_inicio, dt_fim):
     mapa_cnpj = {clean_str(p): clean_str(c) for p, c in zip(parceiros.get('Parceiro', []), parceiros.get('CNPJ', []))}
     df['CodigoIBAMA'] = df['Residuo'].map(lambda r: formatar_codigo_ibama(mapa_ibama.get(r, "")))
     df['CNPJ'] = df['Parceiro'].map(lambda p: formatar_cnpj(mapa_cnpj.get(p, "")))
-    df['NumMTR'] = df['NumMTR'].map(clean_str) if 'NumMTR' in df.columns else ""
     df['Mes'] = df['Data'].dt.month
 
     # --- Pendências: o que impede uma declaração correta ---
@@ -542,27 +541,28 @@ def preparar_dmr(df_registros, dt_inicio, dt_fim):
                      "Como resolver": f"Aba Registros › editar o lançamento ({datas}) e informar o peso"})
     pendencias = pd.DataFrame(pend, columns=["Problema", "Item", "Lançamentos", "Peso (kg)", "Como resolver"])
 
-    def juntar_mtrs(x):
-        return ", ".join(sorted({m for m in x if m and m.lower() != 'nan'}))
-
     # --- Resumo: uma linha por resíduo x destinador x tecnologia ---
     chaves = ['CodigoIBAMA', 'Residuo', 'Estado', 'Parceiro', 'CNPJ', 'Destinacao']
     resumo = df.groupby(chaves, dropna=False).agg(
-        Peso_kg=('Peso_KG_Real', 'sum'), Lancamentos=('Peso_KG_Real', 'size'), MTRs=('NumMTR', juntar_mtrs)
+        Peso_kg=('Peso_KG_Real', 'sum'), Lancamentos=('Peso_KG_Real', 'size')
     ).reset_index().sort_values(['CodigoIBAMA', 'Residuo', 'Parceiro'])
     resumo.insert(6, 'Quantidade (t)', (resumo['Peso_kg'] / 1000).round(4))
     resumo = resumo.rename(columns={
         'CodigoIBAMA': 'Código IBAMA', 'Residuo': 'Resíduo', 'Estado': 'Estado Físico',
         'Parceiro': 'Destinador', 'CNPJ': 'CNPJ Destinador', 'Destinacao': 'Tecnologia de Destinação',
-        'Peso_kg': 'Quantidade (kg)', 'Lancamentos': 'Nº Lançamentos', 'MTRs': 'MTRs'})
+        'Peso_kg': 'Quantidade (kg)', 'Lancamentos': 'Nº Lançamentos'})
 
     # --- Total por código IBAMA (para conferir com o que o SINIR mostra) ---
     df['_codigo'] = df['CodigoIBAMA'].replace("", "SEM CÓDIGO")
     por_codigo = df.groupby('_codigo').agg(
-        Residuos=('Residuo', lambda x: ", ".join(sorted(set(x)))), Peso_kg=('Peso_KG_Real', 'sum')
+        Peso_kg=('Peso_KG_Real', 'sum'),
+        Residuos=('Residuo', lambda x: ", ".join(sorted(set(x)))),
+        Destinadores=('Parceiro', lambda x: ", ".join(sorted({p for p in x if p}))),
     ).reset_index()
-    por_codigo.insert(2, 'Quantidade (t)', (por_codigo['Peso_kg'] / 1000).round(4))
-    por_codigo = por_codigo.rename(columns={'_codigo': 'Código IBAMA', 'Residuos': 'Resíduos incluídos', 'Peso_kg': 'Quantidade (kg)'})
+    por_codigo.insert(1, 'Quantidade (t)', (por_codigo['Peso_kg'] / 1000).round(4))
+    por_codigo.insert(0, 'Conferido', "")
+    por_codigo = por_codigo.rename(columns={'_codigo': 'Código IBAMA', 'Peso_kg': 'Quantidade (kg)',
+                                            'Residuos': 'Resíduos incluídos', 'Destinadores': 'Destinadores'})
 
     # --- Por mês (kg) ---
     por_mes = df.pivot_table(index=['_codigo', 'Residuo'], columns='Mes', values='Peso_KG_Real', aggfunc='sum', fill_value=0)
@@ -571,11 +571,11 @@ def preparar_dmr(df_registros, dt_inicio, dt_fim):
     por_mes = por_mes.reset_index().rename(columns={'_codigo': 'Código IBAMA', 'Residuo': 'Resíduo'})
 
     # --- Lançamentos (detalhe para conferência) ---
-    lanc = df.sort_values('Data')[['Data', 'CodigoIBAMA', 'Residuo', 'Estado', 'Parceiro', 'CNPJ', 'Destinacao', 'Peso_KG_Real', 'NumMTR', 'PedidoCompra']].copy()
+    lanc = df.sort_values('Data')[['Data', 'CodigoIBAMA', 'Residuo', 'Estado', 'Parceiro', 'CNPJ', 'Destinacao', 'Peso_KG_Real', 'PedidoCompra']].copy()
     lanc['Data'] = lanc['Data'].dt.strftime('%d/%m/%Y')
     lanc = lanc.rename(columns={'CodigoIBAMA': 'Código IBAMA', 'Residuo': 'Resíduo', 'Estado': 'Estado Físico',
                                 'Parceiro': 'Destinador', 'CNPJ': 'CNPJ Destinador', 'Destinacao': 'Tecnologia de Destinação',
-                                'Peso_KG_Real': 'Peso (kg)', 'NumMTR': 'MTR', 'PedidoCompra': 'Pedido de Compra'})
+                                'Peso_KG_Real': 'Peso (kg)', 'PedidoCompra': 'Pedido de Compra'})
 
     ign = ignorados[['Data', 'Residuo', 'Parceiro', 'Destinacao']].copy()
     ign['Data'] = pd.to_datetime(ign['Data']).dt.strftime('%d/%m/%Y')
