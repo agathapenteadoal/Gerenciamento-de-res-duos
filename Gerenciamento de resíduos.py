@@ -2121,7 +2121,7 @@ parc_menu.grid(row=row1+1, column=0, sticky="ew", padx=(0,10), pady=(0, 10))
 # Coluna 1: Resíduo
 tb.Label(filtros, text="Resíduo").grid(row=row1, column=1, sticky="w", padx=(0,5), pady=(0,2))
 f_res = tk.StringVar(value="Todos")
-res_menu = tb.Combobox(filtros, textvariable=f_res, values=["Todos"] + banco_residuos, state="readonly")
+res_menu = tb.Combobox(filtros, textvariable=f_res, values=["Todos"] + banco_residuos, state="normal")
 res_menu.grid(row=row1+1, column=1, sticky="ew", padx=(0,10), pady=(0, 10))
 
 # Coluna 2: Estado
@@ -2228,9 +2228,11 @@ cols_numericas = ["Peso", "Valor por kg", "Valor fechado", "Transporte", "Valor 
 # Colunas que devem ficar CENTRADAS (Status/Datas)
 cols_centro = ["Data", "Parceiro", "Resíduo", "Estado", "Destinação", "Tipo", "Certificado OK", "NF OK"]
 
+TITULOS_TABELA = {}
 for c in colunas_tv:
     header_name = c
     if c == "Valor por kg": header_name = "R$/kg" # Encurta o título
+    TITULOS_TABELA[c] = header_name
     
     # Define o alinhamento baseado no tipo de dado
     if c in cols_numericas:
@@ -2240,7 +2242,7 @@ for c in colunas_tv:
     else:
         meu_anchor = "center" # West (Esquerda) - Padrão para texto
         
-    tabela.heading(c, text=header_name, command=lambda col=c: ordenar_coluna(col, False))
+    tabela.heading(c, text=header_name, command=lambda col=c: ordenar_coluna(col))
     tabela.column(c, width=larg.get(c, 100), anchor=meu_anchor, stretch=True)
 
 # --- ADICIONADO: StringVar para o resumo da seleção ---
@@ -3317,30 +3319,50 @@ def config_tags_por_tema():
             tv.tag_configure("oddrow", background=style.colors.bg) 
             tv.tag_configure("evenrow", background="#f2f2f2") # Um cinza bem leve
 
-def ordenar_coluna(col, reverse):
-    """Ordena a tabela principal pela coluna clicada."""
-    data = [(tabela.set(k, col), k) for k in tabela.get_children("")]
-    def to_key(v):
-        v_str = str(v)
-        if col in ("Peso","Valor por kg","Valor fechado","Transporte","Valor Total"):
-            s = v_str.replace("R$","").replace("kg","").replace(" ","").replace(".","").replace(",",".")
-            try: return float(s)
-            except ValueError: return 0.0
-        elif col == "Data":
-            try: return datetime.strptime(v_str, "%d/%b/%y")
-            except ValueError: return datetime.min
-        return v_str.lower()
+ORDEM_TABELA = {"col": None, "reverse": False}
+
+def _chave_ordenacao(col, iid):
+    """Valor usado para ordenar uma linha: lê os dados reais (data, kg, R$), não o texto formatado."""
+    try: row = df_registros_global.loc[int(iid)]
+    except Exception: row = None
+
+    if col == "Data":
+        v = pd.to_datetime(row.get("Data"), errors="coerce") if row is not None else pd.NaT
+        return v if pd.notna(v) else pd.Timestamp.min
+    if col == "Peso":
+        if row is None: return 0.0
+        modo = clean_str(row.get("Modo", "kg")).lower()
+        return to_float_safe(row.get("PesoEmKg", 0.0)) if modo == "unidade" else to_float_safe(row.get("Peso", 0.0))
+    colunas_valor = {"Valor por kg/unidade": "ValorPorKg", "Valor por kg": "ValorPorKg", "Valor fechado": "ValorFechado", "Transporte": "Transporte"}
+    if col in colunas_valor:
+        return to_float_safe(row.get(colunas_valor[col], 0.0)) if row is not None else 0.0
+    if col == "Valor Total":
+        # A coluna mostra o valor do resíduo (total sem o transporte)
+        return (to_float_safe(row.get("ValorTotal", 0.0)) - to_float_safe(row.get("Transporte", 0.0))) if row is not None else 0.0
+    return normalizar(str(tabela.set(iid, col)))
+
+def _aplicar_ordenacao():
+    """Reordena a tabela conforme ORDEM_TABELA e mostra ▲/▼ no título da coluna."""
+    col, reverse = ORDEM_TABELA["col"], ORDEM_TABELA["reverse"]
+    for c, titulo in TITULOS_TABELA.items():
+        seta = (" ▼" if reverse else " ▲") if c == col else ""
+        tabela.heading(c, text=titulo + seta)
+    if not col: return
     try:
-        data.sort(key=lambda x: to_key(x[0]), reverse=reverse)
+        itens = sorted(tabela.get_children(""), key=lambda k: _chave_ordenacao(col, k), reverse=reverse)
     except Exception as e:
-        print(f"Erro ao ordenar coluna {col}: {e}")
+        db._registrar_erro(f"Erro ao ordenar coluna {col}: {e}")
         return
-    for i, (_, k) in enumerate(data):
-        try:
-            tabela.move(k, "", i)
-        except tk.TclError:
-            continue
-    tabela.heading(col, command=lambda c=col: ordenar_coluna(c, not reverse))
+    for i, k in enumerate(itens):
+        tabela.move(k, "", i)
+
+def ordenar_coluna(col):
+    """Clique no título: ordena pela coluna; clicar de novo inverte a ordem."""
+    if ORDEM_TABELA["col"] == col:
+        ORDEM_TABELA["reverse"] = not ORDEM_TABELA["reverse"]
+    else:
+        ORDEM_TABELA["col"], ORDEM_TABELA["reverse"] = col, False
+    _aplicar_ordenacao()
 
 def atualizar_menus_dinamicos(base):
     """Atualiza as Comboboxes de filtro (Parceiro, Resíduo, Destinação)."""
@@ -3355,10 +3377,10 @@ def atualizar_menus_dinamicos(base):
     parc_menu.configure(values=lista_parc)
     if f_parc.get() not in lista_parc: f_parc.set("Todos")
 
-    # Atualiza Combobox Resíduo
+    # Atualiza Combobox Resíduo (digitável: o texto não é apagado enquanto o usuário escreve)
     lista_res = ["Todos"] + res_set
     res_menu.configure(values=lista_res)
-    if f_res.get() not in lista_res: f_res.set("Todos")
+    configurar_autocomplete(res_menu, lista_res)
 
     # Atualiza Combobox Destinação
     lista_dest = ["Todas"] + dest_set
@@ -3396,8 +3418,14 @@ def aplicar_filtros(df):
     if f_parc.get() != "Todos" and 'Parceiro' in d.columns:
         d = d[d["Parceiro"] == f_parc.get()]
 
-    if f_res.get() != "Todos" and 'Residuo' in d.columns:
-        d = d[d["Residuo"] == f_res.get()]
+    res_sel = clean_str(f_res.get())
+    if res_sel and res_sel != "Todos" and 'Residuo' in d.columns:
+        if res_sel in banco_residuos or (d["Residuo"] == res_sel).any():
+            d = d[d["Residuo"] == res_sel]
+        else:
+            # Texto parcial digitado: mostra os resíduos que contêm o texto (ignora acentos/maiúsculas)
+            res_norm = normalizar(res_sel)
+            d = d[d["Residuo"].astype(str).map(normalizar).str.contains(res_norm, regex=False)]
 
     if f_estado.get() != "Todas" and 'Estado' in d.columns:
         d = d[d["Estado"] == f_estado.get()]
@@ -3437,6 +3465,7 @@ def aplicar_filtros(df):
 def preencher_tabela(df):
     """Preenche a tabela priorizando as cores de Estado (Sólido/Líquido)."""
     for r in tabela.get_children(): tabela.delete(r)
+    atualizar_totais_tabela(df)
     
     if df.empty: return
     
@@ -3538,6 +3567,27 @@ def preencher_tabela(df):
         
         tabela.insert("", "end", iid=str(i), values=values_display, tags=tuple(tags))
 
+    if ORDEM_TABELA["col"]: _aplicar_ordenacao()
+
+def atualizar_totais_tabela(df):
+    """Mostra no título do quadro 'Registros' a quantidade, o peso e os valores dos registros filtrados."""
+    n = len(df)
+    if n == 0:
+        tbl_card.configure(text="Registros  —  nenhum registro encontrado")
+        return
+    peso_total = Decimal("0"); venda = Decimal("0"); custo = Decimal("0")
+    for _, row in df.iterrows():
+        modo = clean_str(row.get("Modo", "kg")).lower()
+        peso_total += _dec(row.get("PesoEmKg", 0.0) if modo == "unidade" else row.get("Peso", 0.0))
+        tipo = clean_str(row.get("Tipo", "")).lower()
+        valor = _dec(row.get("ValorTotal", 0.0))
+        if tipo == "venda": venda += valor
+        elif tipo == "custo": custo += valor
+    partes = [f"{n} {'registro' if n == 1 else 'registros'}", fmt_kg(peso_total)]
+    if venda: partes.append(f"Venda: {fmt_moeda(venda)}")
+    if custo: partes.append(f"Custo: {fmt_moeda(custo)}")
+    tbl_card.configure(text="Registros  —  " + "  ·  ".join(partes))
+
 # --- Funções Sincronização/Preenchimento Bancos Apoio ---
 def preencher_banco_tabela():
     global df_banco, banco_dict 
@@ -3616,6 +3666,7 @@ def sincronizar_residuos_ui():
     
     lista_res = ["Todos"] + banco_residuos
     res_menu.configure(values=lista_res)
+    configurar_autocomplete(res_menu, lista_res)
     
     if 'ger_res_cb' in globals(): 
         ger_res_cb.configure(values=banco_residuos_rateio)
